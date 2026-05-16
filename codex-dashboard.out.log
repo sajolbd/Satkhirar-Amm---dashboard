@@ -1,0 +1,40 @@
+
+> satkhirar-amm-dashboard@0.1.0 dev
+> next dev -p 3003
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3003
+
+ ✓ Starting...
+ ✓ Ready in 15s
+ ○ Compiling / ...
+ ✓ Compiled / in 5.3s (497 modules)
+ GET / 200 in 5940ms
+ ✓ Compiled in 1601ms (256 modules)
+ ✓ Compiled in 2.4s (256 modules)
+ ✓ Compiled in 388ms (256 modules)
+ ✓ Compiled in 591ms (256 modules)
+ ✓ Compiled in 983ms (256 modules)
+ ✓ Compiled in 875ms (256 modules)
+ ✓ Compiled in 719ms (256 modules)
+ ✓ Compiled in 914ms (256 modules)
+ ✓ Compiled in 786ms (256 modules)
+ ✓ Compiled in 1236ms (257 modules)
+ ✓ Compiled in 1167ms (257 modules)
+ ✓ Compiled in 1161ms (257 modules)
+ ✓ Compiled in 906ms (257 modules)
+ ✓ Compiled in 932ms (257 modules)
+ ✓ Compiled in 632ms (258 modules)
+ ✓ Compiled in 2.4s (258 modules)
+ ✓ Compiled in 988ms (258 modules)
+ ✓ Compiled in 505ms (258 modules)
+ ✓ Compiled in 921ms (258 modules)
+ ✓ Compiled in 747ms (258 modules)
+ ✓ Compiled in 854ms (258 modules)
+ ✓ Compiled in 1102ms (258 modules)
+ ✓ Compiled in 399ms (258 modules)
+ ✓ Compiled in 496ms (258 modules)
+ ✓ Compiled in 464ms (258 modules)
+ ✓ Compiled in 284ms (258 modules)
+ ✓ Compiled in 295ms (258 modules)
+ ✓ Compiled in 564ms (258 modules)
