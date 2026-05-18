@@ -57,6 +57,7 @@ type WebsiteOrder = {
     district: string;
     area: string;
     address: string;
+    courierOffice?: string;
     note?: string;
   };
   items: {
@@ -82,7 +83,7 @@ type WebsiteOrder = {
 type WebsiteUser = {
   id: string;
   name: string;
-  email: string;
+  email?: string;
   phone: string;
   source: string;
   status: string;
@@ -107,6 +108,7 @@ type MenuId = "overview" | "orders" | "users" | "products" | "analytics" | "sett
 const ADMIN_SESSION_STORAGE_KEY = "satkhirar-amm-dashboard-admin";
 const DASHBOARD_ORDERS_STORAGE_KEY = "satkhirar-amm-dashboard-orders";
 const DASHBOARD_USERS_STORAGE_KEY = "satkhirar-amm-dashboard-users";
+const PHONE_AUTH_EMAIL_DOMAIN = "phone.satkhirar-amm.local";
 
 const emptyProductForm: ProductForm = {
   name: "",
@@ -135,6 +137,35 @@ const menuItems: { id: MenuId; label: string; icon: typeof LayoutDashboard }[] =
 
 function toBanglaNumber(value: number) {
   return Number(value || 0).toLocaleString("bn-BD");
+}
+
+function compactTextParts(parts: Array<string | undefined>) {
+  return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
+}
+
+function getDeliveryAddress(customer: WebsiteOrder["customer"]) {
+  return compactTextParts([
+    customer.courierOffice || customer.address,
+    customer.area,
+    customer.district,
+  ]);
+}
+
+function getDisplayUserEmail(email?: string) {
+  const normalizedEmail = String(email || "").trim();
+
+  if (normalizedEmail.toLowerCase().endsWith(`@${PHONE_AUTH_EMAIL_DOMAIN}`)) {
+    return "";
+  }
+
+  return normalizedEmail;
+}
+
+function getPaymentDetails(payment: WebsiteOrder["payment"]) {
+  return compactTextParts([
+    payment.paymentPhone ? `নম্বর: ${payment.paymentPhone}` : undefined,
+    payment.transactionId ? `ট্রানজেকশন আইডি: ${payment.transactionId}` : undefined,
+  ]);
 }
 
 function getProductImageSrc(image?: string) {
@@ -511,23 +542,29 @@ export default function DashboardPage() {
               <Panel title="সাইন আপ ইউজার" action={`${toBanglaNumber(websiteUsers.length)} জন`}>
                 {websiteUsers.length > 0 ? (
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {websiteUsers.map((user) => (
-                      <div key={user.id || user.email} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <h3 className="font-bold text-[#7c2d12]">{user.name}</h3>
-                            <p className="mt-1 text-sm text-[#9a3412]">{user.phone}</p>
+                    {websiteUsers.map((user) => {
+                      const displayEmail = getDisplayUserEmail(user.email);
+
+                      return (
+                        <div key={user.id || user.phone || user.email} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h3 className="font-bold text-[#7c2d12]">{user.name}</h3>
+                              <p className="mt-1 text-sm text-[#9a3412]">{user.phone}</p>
+                            </div>
+                            <StatusBadge label={user.status || "নতুন"} />
                           </div>
-                          <StatusBadge label={user.status || "নতুন"} />
+                          {displayEmail && (
+                            <p className="mt-4 break-all rounded-xl bg-white px-3 py-2 text-sm font-semibold text-[#7c2d12]">
+                              {displayEmail}
+                            </p>
+                          )}
+                          <p className="mt-2 text-xs font-bold text-primary">
+                            Joined: {user.joinedAt || "N/A"}
+                          </p>
                         </div>
-                        <p className="mt-4 break-all rounded-xl bg-white px-3 py-2 text-sm font-semibold text-[#7c2d12]">
-                          {user.email}
-                        </p>
-                        <p className="mt-2 text-xs font-bold text-primary">
-                          Joined: {user.joinedAt || "N/A"}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <EmptyState icon={<Users className="h-8 w-8" />} title="কোনো ইউজার নেই" />
@@ -825,43 +862,58 @@ function OrderList({
 
   return (
     <div className="space-y-3">
-      {orders.map((order) => (
-        <div key={order.id} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-bold text-[#7c2d12]">{order.id}</h3>
-                <StatusBadge label={order.status} />
+      {orders.map((order) => {
+        const deliveryAddress = getDeliveryAddress(order.customer);
+        const paymentDetails = getPaymentDetails(order.payment);
+
+        return (
+          <div key={order.id} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-bold text-[#7c2d12]">{order.id}</h3>
+                  <StatusBadge label={order.status} />
+                </div>
+                <p className="mt-1 text-sm text-[#9a3412]">
+                  {order.customer.name} · {order.customer.phone}
+                </p>
+                {deliveryAddress && (
+                  <p className="mt-1 max-w-3xl whitespace-pre-wrap break-words text-sm text-[#9a3412]">
+                    {deliveryAddress}
+                  </p>
+                )}
+                <p className="mt-2 text-sm font-semibold text-primary">
+                  {order.items.map((item) => `${item.name} x ${toBanglaNumber(item.quantity)}`).join(", ")}
+                </p>
               </div>
-              <p className="mt-1 text-sm text-[#9a3412]">
-                {order.customer.name} · {order.customer.phone} · {order.customer.district}
-              </p>
-              <p className="mt-2 text-sm font-semibold text-primary">
-                {order.items.map((item) => `${item.name} x ${toBanglaNumber(item.quantity)}`).join(", ")}
-              </p>
-            </div>
-            <div className="min-w-[220px] text-left lg:text-right">
-              <p className="text-xl font-bold text-[#7c2d12]">{toBanglaNumber(order.total)} টাকা</p>
-              <p className="mt-1 text-sm text-[#9a3412]">{order.payment.method}</p>
-              <div className="mt-3 flex gap-2 lg:justify-end">
-                {["প্রসেসিং", "ডেলিভারিতে", "সম্পন্ন"].map((status) => (
-                  <button key={status} type="button" onClick={() => onStatusChange(order.id, status)} className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12] hover:border-primary">
-                    {status}
+              <div className="min-w-[220px] text-left lg:text-right">
+                <p className="text-xl font-bold text-[#7c2d12]">{toBanglaNumber(order.total)} টাকা</p>
+                <p className="mt-1 text-sm text-[#9a3412]">{order.payment.method}</p>
+                {paymentDetails && (
+                  <p className="mt-1 break-words text-xs font-semibold text-primary">
+                    {paymentDetails}
+                  </p>
+                )}
+                <div className="mt-3 flex gap-2 lg:justify-end">
+                  {["প্রসেসিং", "ডেলিভারিতে", "সম্পন্ন"].map((status) => (
+                    <button key={status} type="button" onClick={() => onStatusChange(order.id, status)} className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12] hover:border-primary">
+                      {status}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => onDelete(order.id)}
+                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    ডিলিট
                   </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => onDelete(order.id)}
-                  className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  ডিলিট
-                </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
