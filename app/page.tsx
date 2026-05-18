@@ -16,6 +16,7 @@ import {
   Settings,
   ShieldCheck,
   ShoppingBag,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -24,7 +25,7 @@ import type { ChangeEvent, ReactNode } from "react";
 
 import { apiRequest, getApiError } from "../lib/api";
 
-type ProductStatus = "স্টক আছে" | "স্টক কম" | "বন্ধ";
+type ProductStatus = "স্টক আছে" | "স্টক কম" | "শীঘ্রই আসছে" | "বন্ধ";
 
 type Product = {
   id: string;
@@ -142,7 +143,7 @@ function getProductImageSrc(image?: string) {
 }
 
 function isLowStock(product: Product) {
-  return product.status === "স্টক কম" || Number(product.stock || 0) <= 10;
+  return product.status !== "শীঘ্রই আসছে" && (product.status === "স্টক কম" || Number(product.stock || 0) <= 10);
 }
 
 export default function DashboardPage() {
@@ -349,6 +350,24 @@ export default function DashboardPage() {
       .catch(() => undefined);
   };
 
+  const deleteWebsiteOrder = async (orderId: string) => {
+    const shouldDelete = window.confirm(`Order ${orderId} delete korben?`);
+
+    if (!shouldDelete) return;
+
+    const previousOrders = websiteOrders;
+    setWebsiteOrders((current) => current.filter((order) => order.id !== orderId));
+
+    try {
+      await apiRequest<{ ok: boolean; order: WebsiteOrder }>(`/api/orders/${orderId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      setWebsiteOrders(previousOrders);
+      window.alert(getApiError(error, "Order delete failed."));
+    }
+  };
+
   if (isAuthChecking) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#fffaf6] text-[#7c2d12]">
@@ -470,7 +489,7 @@ export default function DashboardPage() {
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
                 <Panel title="সাম্প্রতিক অর্ডার" action={`${toBanglaNumber(websiteOrders.length)}টি`}>
-                  <OrderList orders={websiteOrders.slice(0, 5)} onStatusChange={updateWebsiteOrderStatus} />
+                  <OrderList orders={websiteOrders.slice(0, 5)} onStatusChange={updateWebsiteOrderStatus} onDelete={deleteWebsiteOrder} />
                 </Panel>
                 <Panel title="লো স্টক প্রোডাক্ট" action={`${toBanglaNumber(lowStockCount)}টি`}>
                   <ProductList products={products.filter(isLowStock).slice(0, 5)} onEdit={openEditProduct} compact />
@@ -482,7 +501,7 @@ export default function DashboardPage() {
           {activeMenu === "orders" && (
             <section className="mt-6">
               <Panel title="ওয়েবসাইট অর্ডার" action={`${toBanglaNumber(websiteOrders.length)}টি`}>
-                <OrderList orders={websiteOrders} onStatusChange={updateWebsiteOrderStatus} />
+                <OrderList orders={websiteOrders} onStatusChange={updateWebsiteOrderStatus} onDelete={deleteWebsiteOrder} />
               </Panel>
             </section>
           )}
@@ -705,6 +724,7 @@ function ProductFormModal({
             <select value={productForm.status} onChange={(event) => onChange("status", event.target.value as ProductStatus)} className="field">
               <option>স্টক আছে</option>
               <option>স্টক কম</option>
+              <option>শীঘ্রই আসছে</option>
               <option>বন্ধ</option>
             </select>
           </Field>
@@ -728,6 +748,28 @@ function ProductFormModal({
                 </label>
               </div>
             </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <div className="grid gap-3 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] p-4 sm:grid-cols-2">
+              <label className="flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-sm font-bold text-[#7c2d12]">
+                <input
+                  type="checkbox"
+                  checked={productForm.isActive ?? true}
+                  onChange={(event) => onChange("isActive", event.target.checked)}
+                  className="h-5 w-5 accent-[#f97316]"
+                />
+                ওয়েবসাইটে দেখান
+              </label>
+              <label className="flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-sm font-bold text-[#7c2d12]">
+                <input
+                  type="checkbox"
+                  checked={productForm.isFeatured ?? true}
+                  onChange={(event) => onChange("isFeatured", event.target.checked)}
+                  className="h-5 w-5 accent-[#f97316]"
+                />
+                ফিচার্ড প্রোডাক্ট
+              </label>
+            </div>
           </div>
         </div>
 
@@ -768,7 +810,15 @@ function Panel({ title, action, children }: { title: string; action: string; chi
   );
 }
 
-function OrderList({ orders, onStatusChange }: { orders: WebsiteOrder[]; onStatusChange: (orderId: string, status: string) => void }) {
+function OrderList({
+  orders,
+  onStatusChange,
+  onDelete,
+}: {
+  orders: WebsiteOrder[];
+  onStatusChange: (orderId: string, status: string) => void;
+  onDelete: (orderId: string) => void;
+}) {
   if (orders.length === 0) {
     return <EmptyState icon={<ClipboardList className="h-8 w-8" />} title="এখনো কোনো অর্ডার নেই" />;
   }
@@ -799,6 +849,14 @@ function OrderList({ orders, onStatusChange }: { orders: WebsiteOrder[]; onStatu
                     {status}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => onDelete(order.id)}
+                  className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  ডিলিট
+                </button>
               </div>
             </div>
           </div>
@@ -905,6 +963,8 @@ function StatusBadge({ label }: { label: string }) {
   const tone =
     label === "স্টক আছে" || label === "সম্পন্ন"
       ? "bg-[#dcfce7] text-[#166534]"
+      : label === "শীঘ্রই আসছে"
+        ? "bg-[#fef3c7] text-[#92400e]"
       : label === "স্টক কম" || label === "প্রসেসিং" || label === "নতুন অর্ডার" || label === "নতুন"
         ? "bg-[#fff1e8] text-primary"
         : label === "বন্ধ"

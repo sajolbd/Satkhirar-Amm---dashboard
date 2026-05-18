@@ -1,5 +1,11 @@
+const DEFAULT_API_URL =
+  process.env.NODE_ENV === "production"
+    ? "https://satkhirar-amm-backend.vercel.app"
+    : "http://localhost:5000";
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+
 export const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"
+  configuredApiUrl || DEFAULT_API_URL
 ).replace(/\/$/, "");
 
 type ApiRequestOptions = RequestInit & {
@@ -10,8 +16,11 @@ export async function apiRequest<T>(
   path: string,
   options: ApiRequestOptions = {}
 ): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
+    cache: method === "GET" ? "no-store" : options.cache,
     headers: {
       "Content-Type": "application/json",
       ...(options.headers ?? {}),
