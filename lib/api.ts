@@ -4,9 +4,25 @@ const DEFAULT_API_URL =
     : "http://localhost:5000";
 const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
 
-export const API_BASE_URL = (
-  configuredApiUrl || DEFAULT_API_URL
-).replace(/\/$/, "");
+function isLocalApiUrl(url: string) {
+  try {
+    const { hostname } = new URL(url);
+    return ["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(
+      hostname
+    );
+  } catch {
+    return false;
+  }
+}
+
+const resolvedApiUrl =
+  process.env.NODE_ENV === "production" &&
+  configuredApiUrl &&
+  isLocalApiUrl(configuredApiUrl)
+    ? DEFAULT_API_URL
+    : configuredApiUrl || DEFAULT_API_URL;
+
+export const API_BASE_URL = resolvedApiUrl.replace(/\/$/, "");
 
 type ApiRequestOptions = RequestInit & {
   body?: BodyInit | null;
