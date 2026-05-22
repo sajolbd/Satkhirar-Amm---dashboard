@@ -266,6 +266,7 @@ export default function DashboardPage() {
   const [editingReview, setEditingReview] = useState<WebsiteReview | null>(null);
   const [reviewForm, setReviewForm] = useState<ReviewForm>(emptyReviewForm);
   const [loadError, setLoadError] = useState("");
+  const [reviewLoadError, setReviewLoadError] = useState("");
 
   const totalRevenue = websiteOrders.reduce((total, order) => total + Number(order.total || 0), 0);
   const totalSales = products.reduce((total, product) => total + Number(product.sales || 0), 0);
@@ -331,19 +332,16 @@ export default function DashboardPage() {
     const loadDashboardData = async () => {
       try {
         setLoadError("");
-        const [nextProducts, nextOrders, nextUsers, nextReviews] = await Promise.all([
+        const [nextProducts, nextOrders, nextUsers] = await Promise.all([
           apiRequest<Product[]>("/api/products"),
           apiRequest<WebsiteOrder[]>("/api/orders"),
           apiRequest<WebsiteUser[]>("/api/users"),
-          apiRequest<WebsiteReview[]>("/api/reviews"),
         ]);
 
         setProducts(nextProducts);
         setWebsiteOrders(nextOrders);
         setWebsiteUsers(nextUsers);
-        setWebsiteReviews(nextReviews);
         window.localStorage.setItem(DASHBOARD_USERS_STORAGE_KEY, JSON.stringify(nextUsers));
-        window.localStorage.setItem(DASHBOARD_REVIEWS_STORAGE_KEY, JSON.stringify(nextReviews));
       } catch (error) {
         setLoadError(getApiError(error, "Dashboard data load failed."));
         setWebsiteOrders([]);
@@ -352,10 +350,20 @@ export default function DashboardPage() {
         if (usersRaw) {
           setWebsiteUsers(JSON.parse(usersRaw));
         }
+      }
 
+      try {
+        setReviewLoadError("");
+        const nextReviews = await apiRequest<WebsiteReview[]>("/api/reviews");
+        setWebsiteReviews(nextReviews);
+        window.localStorage.setItem(DASHBOARD_REVIEWS_STORAGE_KEY, JSON.stringify(nextReviews));
+      } catch (error) {
+        setReviewLoadError(getApiError(error, "Review data load failed."));
         const reviewsRaw = window.localStorage.getItem(DASHBOARD_REVIEWS_STORAGE_KEY);
         if (reviewsRaw) {
           setWebsiteReviews(JSON.parse(reviewsRaw));
+        } else {
+          setWebsiteReviews([]);
         }
       }
     };
@@ -800,6 +808,11 @@ export default function DashboardPage() {
                   onDelete={deleteWebsiteReview}
                   onStatusChange={updateWebsiteReviewStatus}
                 />
+                {reviewLoadError && (
+                  <div className="mt-4 rounded-2xl border border-[#fed7aa] bg-[#fff1e8] px-4 py-3 text-sm font-semibold text-[#9a3412]">
+                    {reviewLoadError}
+                  </div>
+                )}
               </Panel>
             </section>
           )}
