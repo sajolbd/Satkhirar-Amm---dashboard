@@ -10,13 +10,16 @@ import {
   LayoutDashboard,
   LockKeyhole,
   LogOut,
+  MessageSquare,
   PackagePlus,
   Plus,
   Search,
   Settings,
   ShieldCheck,
   ShoppingBag,
+  Star,
   Trash2,
+  Upload,
   Users,
   X,
 } from "lucide-react";
@@ -46,6 +49,42 @@ type Product = {
 };
 
 type ProductForm = Omit<Product, "id" | "sales">;
+
+type ReviewStatus = "pending" | "published" | "hidden";
+
+type ReviewMedia = {
+  type: "image" | "video";
+  url: string;
+  name?: string;
+  contentType?: string;
+  size?: number;
+};
+
+type WebsiteReview = {
+  id: string;
+  name: string;
+  phone?: string;
+  location?: string;
+  title?: string;
+  message: string;
+  rating: number;
+  media?: ReviewMedia;
+  status: ReviewStatus;
+  source?: string;
+  date?: string;
+  createdAt?: string;
+};
+
+type ReviewForm = {
+  name: string;
+  phone: string;
+  location: string;
+  title: string;
+  message: string;
+  rating: number;
+  status: ReviewStatus;
+  media?: ReviewMedia | null;
+};
 
 type WebsiteOrder = {
   id: string;
@@ -103,12 +142,14 @@ type AdminSession = {
   admin: AdminProfile;
 };
 
-type MenuId = "overview" | "orders" | "users" | "products" | "analytics" | "settings";
+type MenuId = "overview" | "orders" | "users" | "reviews" | "products" | "analytics" | "settings";
 
 const ADMIN_SESSION_STORAGE_KEY = "satkhirar-amm-dashboard-admin";
 const DASHBOARD_ORDERS_STORAGE_KEY = "satkhirar-amm-dashboard-orders";
 const DASHBOARD_USERS_STORAGE_KEY = "satkhirar-amm-dashboard-users";
+const DASHBOARD_REVIEWS_STORAGE_KEY = "satkhirar-amm-dashboard-reviews";
 const PHONE_AUTH_EMAIL_DOMAIN = "phone.satkhirar-amm.local";
+const MAX_REVIEW_MEDIA_SIZE = 8 * 1024 * 1024;
 
 const emptyProductForm: ProductForm = {
   name: "",
@@ -126,10 +167,22 @@ const emptyProductForm: ProductForm = {
   isFeatured: true,
 };
 
+const emptyReviewForm: ReviewForm = {
+  name: "",
+  phone: "",
+  location: "",
+  title: "",
+  message: "",
+  rating: 5,
+  status: "published",
+  media: undefined,
+};
+
 const menuItems: { id: MenuId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "overview", label: "ওভারভিউ", icon: LayoutDashboard },
   { id: "orders", label: "অর্ডার", icon: ClipboardList },
   { id: "users", label: "ইউজার", icon: Users },
+  { id: "reviews", label: "রিভিউ", icon: MessageSquare },
   { id: "products", label: "প্রোডাক্ট", icon: Boxes },
   { id: "analytics", label: "অ্যানালিটিক্স", icon: BarChart3 },
   { id: "settings", label: "সেটিংস", icon: Settings },
@@ -168,6 +221,22 @@ function getPaymentDetails(payment: WebsiteOrder["payment"]) {
   ]);
 }
 
+function getReviewStatusLabel(status: ReviewStatus) {
+  if (status === "published") return "প্রকাশিত";
+  if (status === "hidden") return "লুকানো";
+  return "অপেক্ষমাণ";
+}
+
+function formatFileSize(size?: number) {
+  if (!size) return "";
+
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${Math.max(1, Math.round(size / 1024))} KB`;
+}
+
 function getProductImageSrc(image?: string) {
   if (!image) return "";
   return image;
@@ -187,16 +256,22 @@ export default function DashboardPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [websiteOrders, setWebsiteOrders] = useState<WebsiteOrder[]>([]);
   const [websiteUsers, setWebsiteUsers] = useState<WebsiteUser[]>([]);
+  const [websiteReviews, setWebsiteReviews] = useState<WebsiteReview[]>([]);
   const [productSearch, setProductSearch] = useState("");
+  const [reviewSearch, setReviewSearch] = useState("");
   const [isProductFormOpen, setIsProductFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [productForm, setProductForm] = useState<ProductForm>(emptyProductForm);
+  const [isReviewFormOpen, setIsReviewFormOpen] = useState(false);
+  const [editingReview, setEditingReview] = useState<WebsiteReview | null>(null);
+  const [reviewForm, setReviewForm] = useState<ReviewForm>(emptyReviewForm);
   const [loadError, setLoadError] = useState("");
 
   const totalRevenue = websiteOrders.reduce((total, order) => total + Number(order.total || 0), 0);
   const totalSales = products.reduce((total, product) => total + Number(product.sales || 0), 0);
   const totalStock = products.reduce((total, product) => total + Number(product.stock || 0), 0);
   const lowStockCount = products.filter(isLowStock).length;
+  const publishedReviewCount = websiteReviews.filter((review) => review.status === "published").length;
 
   const paymentSummary = useMemo(() => {
     const summary = new Map<string, { count: number; total: number }>();
@@ -226,6 +301,18 @@ export default function DashboardPage() {
     );
   }, [productSearch, products]);
 
+  const filteredReviews = useMemo(() => {
+    const query = reviewSearch.trim().toLowerCase();
+
+    if (!query) return websiteReviews;
+
+    return websiteReviews.filter((review) =>
+      `${review.name} ${review.phone ?? ""} ${review.location ?? ""} ${review.title ?? ""} ${review.message} ${review.id}`
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [reviewSearch, websiteReviews]);
+
   useEffect(() => {
     const storedSession = window.sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
 
@@ -244,16 +331,19 @@ export default function DashboardPage() {
     const loadDashboardData = async () => {
       try {
         setLoadError("");
-        const [nextProducts, nextOrders, nextUsers] = await Promise.all([
+        const [nextProducts, nextOrders, nextUsers, nextReviews] = await Promise.all([
           apiRequest<Product[]>("/api/products"),
           apiRequest<WebsiteOrder[]>("/api/orders"),
           apiRequest<WebsiteUser[]>("/api/users"),
+          apiRequest<WebsiteReview[]>("/api/reviews"),
         ]);
 
         setProducts(nextProducts);
         setWebsiteOrders(nextOrders);
         setWebsiteUsers(nextUsers);
+        setWebsiteReviews(nextReviews);
         window.localStorage.setItem(DASHBOARD_USERS_STORAGE_KEY, JSON.stringify(nextUsers));
+        window.localStorage.setItem(DASHBOARD_REVIEWS_STORAGE_KEY, JSON.stringify(nextReviews));
       } catch (error) {
         setLoadError(getApiError(error, "Dashboard data load failed."));
         setWebsiteOrders([]);
@@ -261,6 +351,11 @@ export default function DashboardPage() {
         const usersRaw = window.localStorage.getItem(DASHBOARD_USERS_STORAGE_KEY);
         if (usersRaw) {
           setWebsiteUsers(JSON.parse(usersRaw));
+        }
+
+        const reviewsRaw = window.localStorage.getItem(DASHBOARD_REVIEWS_STORAGE_KEY);
+        if (reviewsRaw) {
+          setWebsiteReviews(JSON.parse(reviewsRaw));
         }
       }
     };
@@ -362,6 +457,126 @@ export default function DashboardPage() {
     const reader = new FileReader();
     reader.onload = () => updateProductForm("image", String(reader.result));
     reader.readAsDataURL(file);
+  };
+
+  const openAddReview = () => {
+    setEditingReview(null);
+    setReviewForm(emptyReviewForm);
+    setIsReviewFormOpen(true);
+  };
+
+  const openEditReview = (review: WebsiteReview) => {
+    setEditingReview(review);
+    setReviewForm({
+      name: review.name,
+      phone: review.phone ?? "",
+      location: review.location ?? "",
+      title: review.title ?? "",
+      message: review.message,
+      rating: review.rating || 5,
+      status: review.status || "pending",
+      media: review.media,
+    });
+    setIsReviewFormOpen(true);
+  };
+
+  const updateReviewForm = <Key extends keyof ReviewForm>(
+    key: Key,
+    value: ReviewForm[Key]
+  ) => {
+    setReviewForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const saveReview = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    try {
+      const savedReview = await apiRequest<WebsiteReview>(
+        editingReview ? `/api/reviews/${editingReview.id}` : "/api/reviews",
+        {
+          method: editingReview ? "PUT" : "POST",
+          body: JSON.stringify(reviewForm),
+        }
+      );
+
+      setWebsiteReviews((current) =>
+        editingReview
+          ? current.map((review) => (review.id === editingReview.id ? savedReview : review))
+          : [savedReview, ...current]
+      );
+
+      setIsReviewFormOpen(false);
+    } catch (error) {
+      window.alert(getApiError(error, "Review save failed."));
+    }
+  };
+
+  const handleReviewMediaChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    const mediaType = file.type.startsWith("video/") ? "video" : file.type.startsWith("image/") ? "image" : "";
+
+    if (!mediaType) {
+      window.alert("শুধু ছবি বা ভিডিও আপলোড করুন।");
+      return;
+    }
+
+    if (file.size > MAX_REVIEW_MEDIA_SIZE) {
+      window.alert("রিভিউ মিডিয়া ৮ MB-এর মধ্যে রাখুন।");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () =>
+      updateReviewForm("media", {
+        type: mediaType,
+        url: String(reader.result),
+        name: file.name,
+        contentType: file.type,
+        size: file.size,
+      });
+    reader.readAsDataURL(file);
+  };
+
+  const clearReviewMedia = () => {
+    updateReviewForm("media", null);
+  };
+
+  const updateWebsiteReviewStatus = (reviewId: string, status: ReviewStatus) => {
+    setWebsiteReviews((current) =>
+      current.map((review) => (review.id === reviewId ? { ...review, status } : review))
+    );
+
+    void apiRequest<WebsiteReview>(`/api/reviews/${reviewId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    })
+      .then((updatedReview) => {
+        setWebsiteReviews((current) =>
+          current.map((review) => (review.id === reviewId ? updatedReview : review))
+        );
+      })
+      .catch(() => undefined);
+  };
+
+  const deleteWebsiteReview = async (reviewId: string) => {
+    const shouldDelete = window.confirm(`Review ${reviewId} delete korben?`);
+
+    if (!shouldDelete) return;
+
+    const previousReviews = websiteReviews;
+    setWebsiteReviews((current) => current.filter((review) => review.id !== reviewId));
+
+    try {
+      await apiRequest<{ ok: boolean; review: WebsiteReview }>(`/api/reviews/${reviewId}`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      setWebsiteReviews(previousReviews);
+      window.alert(getApiError(error, "Review delete failed."));
+    }
   };
 
   const updateWebsiteOrderStatus = (orderId: string, status: string) => {
@@ -487,14 +702,25 @@ export default function DashboardPage() {
               </h2>
             </div>
             <div className="flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={openAddProduct}
-                className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#ea580c]"
-              >
-                <Plus className="h-4 w-4" />
-                নতুন প্রোডাক্ট
-              </button>
+              {activeMenu === "reviews" ? (
+                <button
+                  type="button"
+                  onClick={openAddReview}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#ea580c]"
+                >
+                  <Plus className="h-4 w-4" />
+                  নতুন রিভিউ
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={openAddProduct}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-primary px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#ea580c]"
+                >
+                  <Plus className="h-4 w-4" />
+                  নতুন প্রোডাক্ট
+                </button>
+              )}
               <div className="inline-flex items-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-3 text-sm font-semibold text-[#7c2d12]">
                 <ShieldCheck className="h-4 w-4 text-primary" />
                 {admin.name}
@@ -510,12 +736,13 @@ export default function DashboardPage() {
 
           {activeMenu === "overview" && (
             <section className="mt-6 space-y-6">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
                 <MetricCard title="মোট বিক্রি" value={`${toBanglaNumber(totalRevenue)} টাকা`} note="রিয়েল অর্ডার থেকে" icon={<BarChart3 className="h-5 w-5" />} />
                 <MetricCard title="অর্ডার" value={toBanglaNumber(websiteOrders.length)} note="ওয়েবসাইট অর্ডার" icon={<ClipboardList className="h-5 w-5" />} />
                 <MetricCard title="ইউজার" value={toBanglaNumber(websiteUsers.length)} note="সাইন আপ ইউজার" icon={<Users className="h-5 w-5" />} />
+                <MetricCard title="রিভিউ" value={toBanglaNumber(websiteReviews.length)} note={`${toBanglaNumber(publishedReviewCount)} প্রকাশিত`} icon={<MessageSquare className="h-5 w-5" />} />
                 <MetricCard title="প্রোডাক্ট" value={toBanglaNumber(products.length)} note={`${toBanglaNumber(totalStock)} স্টক`} icon={<Boxes className="h-5 w-5" />} />
-                <MetricCard title="লো স্টক" value={toBanglaNumber(lowStockCount)} note="রিভিউ দরকার" icon={<PackagePlus className="h-5 w-5" />} />
+                <MetricCard title="লো স্টক" value={toBanglaNumber(lowStockCount)} note="স্টক দেখা দরকার" icon={<PackagePlus className="h-5 w-5" />} />
               </div>
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
@@ -540,35 +767,39 @@ export default function DashboardPage() {
           {activeMenu === "users" && (
             <section className="mt-6">
               <Panel title="সাইন আপ ইউজার" action={`${toBanglaNumber(websiteUsers.length)} জন`}>
-                {websiteUsers.length > 0 ? (
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {websiteUsers.map((user) => {
-                      const displayEmail = getDisplayUserEmail(user.email);
+                <UserList users={websiteUsers} />
+              </Panel>
+            </section>
+          )}
 
-                      return (
-                        <div key={user.id || user.phone || user.email} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <h3 className="font-bold text-[#7c2d12]">{user.name}</h3>
-                              <p className="mt-1 text-sm text-[#9a3412]">{user.phone}</p>
-                            </div>
-                            <StatusBadge label={user.status || "নতুন"} />
-                          </div>
-                          {displayEmail && (
-                            <p className="mt-4 break-all rounded-xl bg-white px-3 py-2 text-sm font-semibold text-[#7c2d12]">
-                              {displayEmail}
-                            </p>
-                          )}
-                          <p className="mt-2 text-xs font-bold text-primary">
-                            Joined: {user.joinedAt || "N/A"}
-                          </p>
-                        </div>
-                      );
-                    })}
+          {activeMenu === "reviews" && (
+            <section className="mt-6">
+              <Panel title="রিভিউ ম্যানেজমেন্ট" action={`${toBanglaNumber(filteredReviews.length)}টি`}>
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex h-11 flex-1 items-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fffaf6] px-4">
+                    <Search className="h-4 w-4 text-primary" />
+                    <input
+                      value={reviewSearch}
+                      onChange={(event) => setReviewSearch(event.target.value)}
+                      placeholder="রিভিউ খুঁজুন"
+                      className="h-full w-full bg-transparent text-sm text-[#7c2d12] outline-none placeholder:text-[#c2410c]/70"
+                    />
                   </div>
-                ) : (
-                  <EmptyState icon={<Users className="h-8 w-8" />} title="কোনো ইউজার নেই" />
-                )}
+                  <button
+                    type="button"
+                    onClick={openAddReview}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-3 text-sm font-semibold text-white"
+                  >
+                    <Plus className="h-4 w-4" />
+                    যোগ করুন
+                  </button>
+                </div>
+                <ReviewList
+                  reviews={filteredReviews}
+                  onEdit={openEditReview}
+                  onDelete={deleteWebsiteReview}
+                  onStatusChange={updateWebsiteReviewStatus}
+                />
               </Panel>
             </section>
           )}
@@ -647,6 +878,18 @@ export default function DashboardPage() {
           onSubmit={saveProduct}
           onChange={updateProductForm}
           onImageChange={handleProductImageChange}
+        />
+      )}
+
+      {isReviewFormOpen && (
+        <ReviewFormModal
+          editingReview={editingReview}
+          reviewForm={reviewForm}
+          onClose={() => setIsReviewFormOpen(false)}
+          onSubmit={saveReview}
+          onChange={updateReviewForm}
+          onMediaChange={handleReviewMediaChange}
+          onMediaClear={clearReviewMedia}
         />
       )}
     </main>
@@ -824,6 +1067,113 @@ function ProductFormModal({
   );
 }
 
+function ReviewFormModal({
+  editingReview,
+  reviewForm,
+  onClose,
+  onSubmit,
+  onChange,
+  onMediaChange,
+  onMediaClear,
+}: {
+  editingReview: WebsiteReview | null;
+  reviewForm: ReviewForm;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onChange: <Key extends keyof ReviewForm>(key: Key, value: ReviewForm[Key]) => void;
+  onMediaChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onMediaClear: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#2d1204]/50 px-4 py-6">
+      <form onSubmit={onSubmit} className="max-h-[calc(100vh-3rem)] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-[0_30px_90px_rgba(45,18,4,0.25)] sm:p-6">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-primary">Review Management</p>
+            <h2 className="mt-1 text-2xl font-bold text-[#7c2d12]">
+              {editingReview ? "রিভিউ এডিট করুন" : "নতুন রিভিউ যোগ করুন"}
+            </h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-[#fed7aa] bg-[#fff7f1] p-2 text-[#7c2d12]">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="নাম">
+            <input required value={reviewForm.name} onChange={(event) => onChange("name", event.target.value)} className="field" />
+          </Field>
+          <Field label="মোবাইল">
+            <input value={reviewForm.phone} onChange={(event) => onChange("phone", event.target.value)} className="field" />
+          </Field>
+          <Field label="লোকেশন">
+            <input value={reviewForm.location} onChange={(event) => onChange("location", event.target.value)} className="field" />
+          </Field>
+          <Field label="রেটিং">
+            <select value={reviewForm.rating} onChange={(event) => onChange("rating", Number(event.target.value))} className="field">
+              <option value={5}>৫ স্টার</option>
+              <option value={4}>৪ স্টার</option>
+              <option value={3}>৩ স্টার</option>
+              <option value={2}>২ স্টার</option>
+              <option value={1}>১ স্টার</option>
+            </select>
+          </Field>
+          <Field label="স্ট্যাটাস">
+            <select value={reviewForm.status} onChange={(event) => onChange("status", event.target.value as ReviewStatus)} className="field">
+              <option value="published">প্রকাশিত</option>
+              <option value="pending">অপেক্ষমাণ</option>
+              <option value="hidden">লুকানো</option>
+            </select>
+          </Field>
+          <Field label="শিরোনাম">
+            <input value={reviewForm.title} onChange={(event) => onChange("title", event.target.value)} className="field" />
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="রিভিউ">
+              <textarea required rows={4} value={reviewForm.message} onChange={(event) => onChange("message", event.target.value)} className="field min-h-[128px] py-3" />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="ছবি / ভিডিও">
+              <div className="grid gap-4 sm:grid-cols-[180px_1fr] sm:items-center">
+                <ReviewMediaPreview media={reviewForm.media} size="large" />
+                <div className="grid gap-3">
+                  <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-5 text-center text-[#7c2d12] transition hover:border-primary">
+                    <Upload className="h-7 w-7 text-primary" />
+                    <span className="mt-2 text-sm font-bold">মিডিয়া আপলোড করুন</span>
+                    <span className="mt-1 text-xs text-[#9a3412]">ছবি অথবা ভিডিও, সর্বোচ্চ ৮ MB</span>
+                    <input type="file" accept="image/*,video/*" onChange={onMediaChange} className="sr-only" />
+                  </label>
+                  {reviewForm.media && (
+                    <button
+                      type="button"
+                      onClick={onMediaClear}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      মিডিয়া সরান
+                    </button>
+                  )}
+                </div>
+              </div>
+            </Field>
+          </div>
+        </div>
+
+        <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className="rounded-2xl border border-[#fed7aa] bg-white px-5 py-3 font-semibold text-[#7c2d12]">
+            বাতিল
+          </button>
+          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 font-semibold text-white">
+            <CheckCircle2 className="h-5 w-5" />
+            সংরক্ষণ করুন
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function MetricCard({ title, value, note, icon }: { title: string; value: string; note: string; icon: ReactNode }) {
   return (
     <div className="rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-soft">
@@ -918,6 +1268,104 @@ function OrderList({
   );
 }
 
+function UserList({ users }: { users: WebsiteUser[] }) {
+  if (users.length === 0) {
+    return <EmptyState icon={<Users className="h-8 w-8" />} title="কোনো ইউজার নেই" />;
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-[#fed7aa] bg-white">
+      <div className="hidden grid-cols-[1.2fr_1fr_1.3fr_130px] gap-3 bg-[#fff7f1] px-4 py-3 text-xs font-bold uppercase tracking-wide text-[#9a3412] md:grid">
+        <span>নাম</span>
+        <span>মোবাইল</span>
+        <span>ইমেইল</span>
+        <span>স্ট্যাটাস</span>
+      </div>
+      <div className="divide-y divide-[#fed7aa]">
+        {users.map((user) => {
+          const displayEmail = getDisplayUserEmail(user.email);
+
+          return (
+            <div key={user.id || user.phone || user.email} className="grid gap-3 bg-[#fffaf6] px-4 py-4 md:grid-cols-[1.2fr_1fr_1.3fr_130px] md:items-center">
+              <div className="min-w-0">
+                <p className="font-bold text-[#7c2d12]">{user.name || "নাম নেই"}</p>
+                <p className="mt-1 text-xs font-bold text-primary">Joined: {user.joinedAt || "N/A"}</p>
+              </div>
+              <p className="break-words text-sm font-semibold text-[#9a3412]">{user.phone || "N/A"}</p>
+              <p className="break-all text-sm font-semibold text-[#7c2d12]">{displayEmail || "ইমেইল নেই"}</p>
+              <StatusBadge label={user.status || "নতুন"} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ReviewList({
+  reviews,
+  onEdit,
+  onDelete,
+  onStatusChange,
+}: {
+  reviews: WebsiteReview[];
+  onEdit: (review: WebsiteReview) => void;
+  onDelete: (reviewId: string) => void;
+  onStatusChange: (reviewId: string, status: ReviewStatus) => void;
+}) {
+  if (reviews.length === 0) {
+    return <EmptyState icon={<MessageSquare className="h-8 w-8" />} title="কোনো রিভিউ নেই" />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {reviews.map((review) => (
+        <div key={review.id} className="grid gap-4 rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4 xl:grid-cols-[96px_minmax(0,1fr)_auto] xl:items-start">
+          <ReviewMediaPreview media={review.media} />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-bold text-[#7c2d12]">{review.title || review.name}</h3>
+              <StatusBadge label={getReviewStatusLabel(review.status)} />
+              <ReviewRating rating={review.rating} />
+            </div>
+            <p className="mt-1 text-sm text-[#9a3412]">
+              {review.name} {review.phone ? `· ${review.phone}` : ""} {review.location ? `· ${review.location}` : ""}
+            </p>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[#7c2d12]">
+              {review.message}
+            </p>
+            {review.media?.name && (
+              <p className="mt-2 text-xs font-bold text-primary">
+                {review.media.name} {formatFileSize(review.media.size) ? `· ${formatFileSize(review.media.size)}` : ""}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 xl:justify-end">
+            {review.status !== "published" && (
+              <button type="button" onClick={() => onStatusChange(review.id, "published")} className="rounded-xl border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs font-bold text-[#166534]">
+                প্রকাশ
+              </button>
+            )}
+            {review.status !== "hidden" && (
+              <button type="button" onClick={() => onStatusChange(review.id, "hidden")} className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12]">
+                লুকান
+              </button>
+            )}
+            <button type="button" onClick={() => onEdit(review)} className="inline-flex items-center justify-center gap-1 rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12]">
+              <Edit3 className="h-3.5 w-3.5" />
+              এডিট
+            </button>
+            <button type="button" onClick={() => onDelete(review.id)} className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400">
+              <Trash2 className="h-3.5 w-3.5" />
+              ডিলিট
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ProductList({ products, onEdit, compact = false }: { products: Product[]; onEdit: (product: Product) => void; compact?: boolean }) {
   if (products.length === 0) {
     return <EmptyState icon={<Boxes className="h-8 w-8" />} title="কোনো প্রোডাক্ট নেই" />;
@@ -969,6 +1417,47 @@ function ProductImage({ image, name, size = "normal" }: { image?: string; name: 
   return <img src={src} alt={name} className={className} onError={() => setFailed(true)} />;
 }
 
+function ReviewMediaPreview({ media, size = "normal" }: { media?: ReviewMedia | null; size?: "normal" | "large" }) {
+  const className =
+    size === "large"
+      ? "h-[150px] w-full rounded-2xl object-cover sm:w-[180px]"
+      : "h-[88px] w-full rounded-2xl object-cover xl:h-[88px] xl:w-[88px]";
+
+  if (!media?.url) {
+    return (
+      <div className={`${className} flex items-center justify-center bg-gradient-to-br from-orange-200 to-amber-500 text-xs font-bold text-white`}>
+        মিডিয়া নেই
+      </div>
+    );
+  }
+
+  if (media.type === "video") {
+    return (
+      <video
+        src={media.url}
+        controls={size === "large"}
+        muted
+        playsInline
+        className={`${className} bg-[#2d1204]`}
+      />
+    );
+  }
+
+  return <img src={media.url} alt={media.name || "Review media"} className={className} />;
+}
+
+function ReviewRating({ rating }: { rating: number }) {
+  const value = Math.min(5, Math.max(1, Number(rating || 5)));
+
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[#ffb703]" aria-label={`${value} star review`}>
+      {Array.from({ length: 5 }).map((_, index) => (
+        <Star key={index} className={`h-4 w-4 ${index < value ? "fill-current" : "text-[#fed7aa]"}`} />
+      ))}
+    </span>
+  );
+}
+
 function SimpleBars({ products }: { products: Product[] }) {
   const max = Math.max(1, ...products.map((product) => Number(product.sales || 0)));
 
@@ -1013,13 +1502,13 @@ function SettingCard({ title, value }: { title: string; value: string }) {
 
 function StatusBadge({ label }: { label: string }) {
   const tone =
-    label === "স্টক আছে" || label === "সম্পন্ন"
+    label === "স্টক আছে" || label === "সম্পন্ন" || label === "প্রকাশিত"
       ? "bg-[#dcfce7] text-[#166534]"
       : label === "শীঘ্রই আসছে"
         ? "bg-[#fef3c7] text-[#92400e]"
-      : label === "স্টক কম" || label === "প্রসেসিং" || label === "নতুন অর্ডার" || label === "নতুন"
+      : label === "স্টক কম" || label === "প্রসেসিং" || label === "নতুন অর্ডার" || label === "নতুন" || label === "অপেক্ষমাণ"
         ? "bg-[#fff1e8] text-primary"
-        : label === "বন্ধ"
+        : label === "বন্ধ" || label === "লুকানো"
           ? "bg-[#fee2e2] text-[#b91c1c]"
           : "bg-[#e0f2fe] text-[#0369a1]";
 
