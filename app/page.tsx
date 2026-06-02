@@ -34,8 +34,10 @@ type Product = {
   id: string;
   name: string;
   category: string;
+  menuSlug?: string;
   unit: string;
   price: number;
+  purchasePrice?: number;
   stock: number;
   sales: number;
   status: ProductStatus;
@@ -43,6 +45,7 @@ type Product = {
   image?: string;
   variety?: string;
   discountLabel?: string;
+  discountAmount?: number;
   shortNote?: string;
   isActive?: boolean;
   isFeatured?: boolean;
@@ -142,7 +145,14 @@ type AdminSession = {
   admin: AdminProfile;
 };
 
-type MenuId = "overview" | "orders" | "users" | "reviews" | "products" | "analytics" | "settings";
+type MenuId =
+  | "overview"
+  | "orders"
+  | "users"
+  | "reviews"
+  | "products"
+  | "analytics"
+  | "settings";
 
 const ADMIN_SESSION_STORAGE_KEY = "satkhirar-amm-dashboard-admin";
 const DASHBOARD_ORDERS_STORAGE_KEY = "satkhirar-amm-dashboard-orders";
@@ -150,18 +160,33 @@ const DASHBOARD_USERS_STORAGE_KEY = "satkhirar-amm-dashboard-users";
 const DASHBOARD_REVIEWS_STORAGE_KEY = "satkhirar-amm-dashboard-reviews";
 const PHONE_AUTH_EMAIL_DOMAIN = "phone.satkhirar-amm.local";
 const MAX_REVIEW_MEDIA_SIZE = 8 * 1024 * 1024;
+const CARET_COST_PER_ORDER = 120;
+const DELIVERY_COST_PER_ORDER = 150;
+
+const productMenuOptions = [
+  { slug: "mango", label: "আম", category: "আম" },
+  { slug: "gur", label: "গুড়", category: "গুড়" },
+  { slug: "plants", label: "চারা", category: "চারা" },
+  { slug: "pickle", label: "আচার", category: "আচার" },
+  { slug: "oil", label: "তেল", category: "তেল" },
+  { slug: "honey", label: "মধু", category: "মধু" },
+  { slug: "frozen-food", label: "ফ্রোজেন ফুড", category: "ফ্রোজেন ফুড" },
+];
 
 const emptyProductForm: ProductForm = {
   name: "",
   category: "আম",
-  unit: "প্রতি ৫ কেজি বক্স",
+  menuSlug: "mango",
+  unit: "প্রতি ১০ কেজি বক্স",
   price: 0,
+  purchasePrice: 0,
   stock: 0,
   status: "স্টক আছে",
   color: "from-orange-300 to-amber-500",
   image: "",
   variety: "",
   discountLabel: "",
+  discountAmount: 0,
   shortNote: "",
   isActive: true,
   isFeatured: true,
@@ -178,22 +203,57 @@ const emptyReviewForm: ReviewForm = {
   media: undefined,
 };
 
-const menuItems: { id: MenuId; label: string; icon: typeof LayoutDashboard }[] = [
-  { id: "overview", label: "ওভারভিউ", icon: LayoutDashboard },
-  { id: "orders", label: "অর্ডার", icon: ClipboardList },
-  { id: "users", label: "ইউজার", icon: Users },
-  { id: "reviews", label: "রিভিউ", icon: MessageSquare },
-  { id: "products", label: "প্রোডাক্ট", icon: Boxes },
-  { id: "analytics", label: "অ্যানালিটিক্স", icon: BarChart3 },
-  { id: "settings", label: "সেটিংস", icon: Settings },
-];
+const menuItems: { id: MenuId; label: string; icon: typeof LayoutDashboard }[] =
+  [
+    { id: "overview", label: "ওভারভিউ", icon: LayoutDashboard },
+    { id: "orders", label: "অর্ডার", icon: ClipboardList },
+    { id: "users", label: "ইউজার", icon: Users },
+    { id: "reviews", label: "রিভিউ", icon: MessageSquare },
+    { id: "products", label: "প্রোডাক্ট", icon: Boxes },
+    { id: "analytics", label: "অ্যানালিটিক্স", icon: BarChart3 },
+    { id: "settings", label: "সেটিংস", icon: Settings },
+  ];
 
 function toBanglaNumber(value: number) {
   return Number(value || 0).toLocaleString("bn-BD");
 }
 
+function toEnglishDigits(value: string) {
+  const digitMap: Record<string, string> = {
+    "০": "0",
+    "১": "1",
+    "২": "2",
+    "৩": "3",
+    "৪": "4",
+    "৫": "5",
+    "৬": "6",
+    "৭": "7",
+    "৮": "8",
+    "৯": "9",
+  };
+
+  return value.replace(/[০-৯]/g, (digit) => digitMap[digit] ?? digit);
+}
+
+function parseDiscountAmount(product: Product) {
+  if (product.discountAmount !== undefined) {
+    return Number(product.discountAmount || 0);
+  }
+
+  const label = toEnglishDigits(product.discountLabel ?? "");
+  const match = label.match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
+function getDiscountLabel(amount: number) {
+  return amount > 0 ? `${toBanglaNumber(amount)} টাকা ডিসকাউন্ট` : "";
+}
+
 function compactTextParts(parts: Array<string | undefined>) {
-  return parts.map((part) => part?.trim()).filter(Boolean).join(", ");
+  return parts
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 function getDeliveryAddress(customer: WebsiteOrder["customer"]) {
@@ -217,7 +277,9 @@ function getDisplayUserEmail(email?: string) {
 function getPaymentDetails(payment: WebsiteOrder["payment"]) {
   return compactTextParts([
     payment.paymentPhone ? `নম্বর: ${payment.paymentPhone}` : undefined,
-    payment.transactionId ? `ট্রানজেকশন আইডি: ${payment.transactionId}` : undefined,
+    payment.transactionId
+      ? `ট্রানজেকশন আইডি: ${payment.transactionId}`
+      : undefined,
   ]);
 }
 
@@ -243,13 +305,72 @@ function getProductImageSrc(image?: string) {
 }
 
 function isLowStock(product: Product) {
-  return product.status !== "শীঘ্রই আসছে" && (product.status === "স্টক কম" || Number(product.stock || 0) <= 10);
+  return (
+    product.status !== "শীঘ্রই আসছে" &&
+    (product.status === "স্টক কম" || Number(product.stock || 0) <= 10)
+  );
+}
+
+function getProductMenuLabel(menuSlug?: string) {
+  return (
+    productMenuOptions.find((option) => option.slug === menuSlug)?.label ?? "আম"
+  );
+}
+
+function getProductMenuByCategory(category?: string) {
+  return productMenuOptions.find((option) => option.category === category);
+}
+
+function getProductMenuBySlug(menuSlug?: string) {
+  return productMenuOptions.find((option) => option.slug === menuSlug);
+}
+
+function normalizeProductPayload(productForm: ProductForm) {
+  const discountAmount = Number(productForm.discountAmount || 0);
+  const selectedMenu =
+    getProductMenuBySlug(productForm.menuSlug) ||
+    getProductMenuByCategory(productForm.category) ||
+    productMenuOptions[0];
+
+  return {
+    ...productForm,
+    category: selectedMenu.category,
+    price: Number(productForm.price || 0),
+    purchasePrice: Number(productForm.purchasePrice || 0),
+    stock: Number(productForm.stock || 0),
+    discountAmount,
+    discountLabel: getDiscountLabel(discountAmount),
+    menuSlug: selectedMenu.slug,
+  };
+}
+
+function mergeProductFallback(product: Product, fallback?: Partial<Product>): Product {
+  return {
+    ...product,
+    purchasePrice:
+      product.purchasePrice !== undefined
+        ? Number(product.purchasePrice || 0)
+        : Number(fallback?.purchasePrice || 0),
+    discountAmount:
+      product.discountAmount !== undefined
+        ? Number(product.discountAmount || 0)
+        : Number(fallback?.discountAmount || 0),
+    discountLabel:
+      product.discountLabel ||
+      getDiscountLabel(Number(fallback?.discountAmount || 0)) ||
+      fallback?.discountLabel ||
+      "",
+    menuSlug: product.menuSlug || fallback?.menuSlug || "mango",
+  };
 }
 
 export default function DashboardPage() {
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [adminLoginForm, setAdminLoginForm] = useState({ email: "", password: "" });
+  const [adminLoginForm, setAdminLoginForm] = useState({
+    email: "",
+    password: "",
+  });
   const [adminLoginError, setAdminLoginError] = useState("");
   const [isAdminLoggingIn, setIsAdminLoggingIn] = useState(false);
   const [activeMenu, setActiveMenu] = useState<MenuId>("overview");
@@ -263,16 +384,75 @@ export default function DashboardPage() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [productForm, setProductForm] = useState<ProductForm>(emptyProductForm);
   const [isReviewFormOpen, setIsReviewFormOpen] = useState(false);
-  const [editingReview, setEditingReview] = useState<WebsiteReview | null>(null);
+  const [editingReview, setEditingReview] = useState<WebsiteReview | null>(
+    null,
+  );
   const [reviewForm, setReviewForm] = useState<ReviewForm>(emptyReviewForm);
   const [loadError, setLoadError] = useState("");
   const [reviewLoadError, setReviewLoadError] = useState("");
 
-  const totalRevenue = websiteOrders.reduce((total, order) => total + Number(order.total || 0), 0);
-  const totalSales = products.reduce((total, product) => total + Number(product.sales || 0), 0);
-  const totalStock = products.reduce((total, product) => total + Number(product.stock || 0), 0);
+  const totalRevenue = websiteOrders.reduce(
+    (total, order) => total + Number(order.total || 0),
+    0,
+  );
+  const totalSales = products.reduce(
+    (total, product) => total + Number(product.sales || 0),
+    0,
+  );
+  const totalStock = products.reduce(
+    (total, product) => total + Number(product.stock || 0),
+    0,
+  );
   const lowStockCount = products.filter(isLowStock).length;
-  const publishedReviewCount = websiteReviews.filter((review) => review.status === "published").length;
+  const publishedReviewCount = websiteReviews.filter(
+    (review) => review.status === "published",
+  ).length;
+
+  const productCostById = useMemo(() => {
+    return new Map(
+      products.map((product) => [
+        product.id,
+        Number(product.purchasePrice || 0),
+      ]),
+    );
+  }, [products]);
+
+  const orderProfitRows = useMemo(() => {
+    return websiteOrders.map((order) => {
+      const productCost = order.items.reduce(
+        (total, item) =>
+          total +
+          Number(item.quantity || 0) *
+            Number(productCostById.get(item.id) || 0),
+        0,
+      );
+      const salesAmount = Number(order.subtotal || order.total || 0);
+      const operationalCost = CARET_COST_PER_ORDER + DELIVERY_COST_PER_ORDER;
+      const profit = salesAmount - productCost - operationalCost;
+
+      return {
+        id: order.id,
+        label: order.id,
+        salesAmount,
+        productCost,
+        operationalCost,
+        profit,
+      };
+    });
+  }, [productCostById, websiteOrders]);
+
+  const totalProductCost = orderProfitRows.reduce(
+    (total, order) => total + order.productCost,
+    0,
+  );
+  const totalOperationalCost = orderProfitRows.reduce(
+    (total, order) => total + order.operationalCost,
+    0,
+  );
+  const actualProfit = orderProfitRows.reduce(
+    (total, order) => total + order.profit,
+    0,
+  );
 
   const paymentSummary = useMemo(() => {
     const summary = new Map<string, { count: number; total: number }>();
@@ -298,7 +478,9 @@ export default function DashboardPage() {
     if (!query) return products;
 
     return products.filter((product) =>
-      `${product.name} ${product.category} ${product.id}`.toLowerCase().includes(query)
+      `${product.name} ${product.category} ${product.menuSlug ?? ""} ${product.id}`
+        .toLowerCase()
+        .includes(query),
     );
   }, [productSearch, products]);
 
@@ -310,12 +492,14 @@ export default function DashboardPage() {
     return websiteReviews.filter((review) =>
       `${review.name} ${review.phone ?? ""} ${review.location ?? ""} ${review.title ?? ""} ${review.message} ${review.id}`
         .toLowerCase()
-        .includes(query)
+        .includes(query),
     );
   }, [reviewSearch, websiteReviews]);
 
   useEffect(() => {
-    const storedSession = window.sessionStorage.getItem(ADMIN_SESSION_STORAGE_KEY);
+    const storedSession = window.sessionStorage.getItem(
+      ADMIN_SESSION_STORAGE_KEY,
+    );
 
     if (storedSession) {
       setAdminSession(JSON.parse(storedSession));
@@ -338,15 +522,27 @@ export default function DashboardPage() {
           apiRequest<WebsiteUser[]>("/api/users"),
         ]);
 
-        setProducts(nextProducts);
+        setProducts((currentProducts) =>
+          nextProducts.map((nextProduct) =>
+            mergeProductFallback(
+              nextProduct,
+              currentProducts.find((product) => product.id === nextProduct.id),
+            ),
+          ),
+        );
         setWebsiteOrders(nextOrders);
         setWebsiteUsers(nextUsers);
-        window.localStorage.setItem(DASHBOARD_USERS_STORAGE_KEY, JSON.stringify(nextUsers));
+        window.localStorage.setItem(
+          DASHBOARD_USERS_STORAGE_KEY,
+          JSON.stringify(nextUsers),
+        );
       } catch (error) {
         setLoadError(getApiError(error, "Dashboard data load failed."));
         setWebsiteOrders([]);
 
-        const usersRaw = window.localStorage.getItem(DASHBOARD_USERS_STORAGE_KEY);
+        const usersRaw = window.localStorage.getItem(
+          DASHBOARD_USERS_STORAGE_KEY,
+        );
         if (usersRaw) {
           setWebsiteUsers(JSON.parse(usersRaw));
         }
@@ -356,10 +552,15 @@ export default function DashboardPage() {
         setReviewLoadError("");
         const nextReviews = await apiRequest<WebsiteReview[]>("/api/reviews");
         setWebsiteReviews(nextReviews);
-        window.localStorage.setItem(DASHBOARD_REVIEWS_STORAGE_KEY, JSON.stringify(nextReviews));
+        window.localStorage.setItem(
+          DASHBOARD_REVIEWS_STORAGE_KEY,
+          JSON.stringify(nextReviews),
+        );
       } catch (error) {
         setReviewLoadError(getApiError(error, "Review data load failed."));
-        const reviewsRaw = window.localStorage.getItem(DASHBOARD_REVIEWS_STORAGE_KEY);
+        const reviewsRaw = window.localStorage.getItem(
+          DASHBOARD_REVIEWS_STORAGE_KEY,
+        );
         if (reviewsRaw) {
           setWebsiteReviews(JSON.parse(reviewsRaw));
         } else {
@@ -385,7 +586,10 @@ export default function DashboardPage() {
         body: JSON.stringify(adminLoginForm),
       });
 
-      window.sessionStorage.setItem(ADMIN_SESSION_STORAGE_KEY, JSON.stringify(session));
+      window.sessionStorage.setItem(
+        ADMIN_SESSION_STORAGE_KEY,
+        JSON.stringify(session),
+      );
       setAdminSession(session);
       setAdminLoginForm({ email: "", password: "" });
     } catch (error) {
@@ -407,18 +611,25 @@ export default function DashboardPage() {
   };
 
   const openEditProduct = (product: Product) => {
+    const selectedMenu =
+      getProductMenuByCategory(product.category) ||
+      getProductMenuBySlug(product.menuSlug);
+
     setEditingProduct(product);
     setProductForm({
       name: product.name,
       category: product.category,
+      menuSlug: selectedMenu?.slug ?? "mango",
       unit: product.unit,
       price: product.price,
+      purchasePrice: product.purchasePrice ?? 0,
       stock: product.stock,
       status: product.status,
       color: product.color,
       image: product.image ?? "",
       variety: product.variety ?? "",
       discountLabel: product.discountLabel ?? "",
+      discountAmount: parseDiscountAmount(product),
       shortNote: product.shortNote ?? "",
       isActive: product.isActive ?? true,
       isFeatured: product.isFeatured ?? true,
@@ -428,27 +639,31 @@ export default function DashboardPage() {
 
   const updateProductForm = <Key extends keyof ProductForm>(
     key: Key,
-    value: ProductForm[Key]
+    value: ProductForm[Key],
   ) => {
     setProductForm((current) => ({ ...current, [key]: value }));
   };
 
   const saveProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const productPayload = normalizeProductPayload(productForm);
 
     try {
       const savedProduct = await apiRequest<Product>(
         editingProduct ? `/api/products/${editingProduct.id}` : "/api/products",
         {
           method: editingProduct ? "PUT" : "POST",
-          body: JSON.stringify(productForm),
-        }
+          body: JSON.stringify(productPayload),
+        },
       );
+      const nextProduct = mergeProductFallback(savedProduct, productPayload);
 
       setProducts((current) =>
         editingProduct
-          ? current.map((product) => (product.id === editingProduct.id ? savedProduct : product))
-          : [savedProduct, ...current]
+          ? current.map((product) =>
+              product.id === editingProduct.id ? nextProduct : product,
+            )
+          : [nextProduct, ...current],
       );
 
       setIsProductFormOpen(false);
@@ -490,7 +705,7 @@ export default function DashboardPage() {
 
   const updateReviewForm = <Key extends keyof ReviewForm>(
     key: Key,
-    value: ReviewForm[Key]
+    value: ReviewForm[Key],
   ) => {
     setReviewForm((current) => ({ ...current, [key]: value }));
   };
@@ -504,13 +719,15 @@ export default function DashboardPage() {
         {
           method: editingReview ? "PUT" : "POST",
           body: JSON.stringify(reviewForm),
-        }
+        },
       );
 
       setWebsiteReviews((current) =>
         editingReview
-          ? current.map((review) => (review.id === editingReview.id ? savedReview : review))
-          : [savedReview, ...current]
+          ? current.map((review) =>
+              review.id === editingReview.id ? savedReview : review,
+            )
+          : [savedReview, ...current],
       );
 
       setIsReviewFormOpen(false);
@@ -524,7 +741,11 @@ export default function DashboardPage() {
 
     if (!file) return;
 
-    const mediaType = file.type.startsWith("video/") ? "video" : file.type.startsWith("image/") ? "image" : "";
+    const mediaType = file.type.startsWith("video/")
+      ? "video"
+      : file.type.startsWith("image/")
+        ? "image"
+        : "";
 
     if (!mediaType) {
       window.alert("শুধু ছবি বা ভিডিও আপলোড করুন।");
@@ -552,9 +773,14 @@ export default function DashboardPage() {
     updateReviewForm("media", null);
   };
 
-  const updateWebsiteReviewStatus = (reviewId: string, status: ReviewStatus) => {
+  const updateWebsiteReviewStatus = (
+    reviewId: string,
+    status: ReviewStatus,
+  ) => {
     setWebsiteReviews((current) =>
-      current.map((review) => (review.id === reviewId ? { ...review, status } : review))
+      current.map((review) =>
+        review.id === reviewId ? { ...review, status } : review,
+      ),
     );
 
     void apiRequest<WebsiteReview>(`/api/reviews/${reviewId}/status`, {
@@ -563,7 +789,9 @@ export default function DashboardPage() {
     })
       .then((updatedReview) => {
         setWebsiteReviews((current) =>
-          current.map((review) => (review.id === reviewId ? updatedReview : review))
+          current.map((review) =>
+            review.id === reviewId ? updatedReview : review,
+          ),
         );
       })
       .catch(() => undefined);
@@ -575,12 +803,17 @@ export default function DashboardPage() {
     if (!shouldDelete) return;
 
     const previousReviews = websiteReviews;
-    setWebsiteReviews((current) => current.filter((review) => review.id !== reviewId));
+    setWebsiteReviews((current) =>
+      current.filter((review) => review.id !== reviewId),
+    );
 
     try {
-      await apiRequest<{ ok: boolean; review: WebsiteReview }>(`/api/reviews/${reviewId}`, {
-        method: "DELETE",
-      });
+      await apiRequest<{ ok: boolean; review: WebsiteReview }>(
+        `/api/reviews/${reviewId}`,
+        {
+          method: "DELETE",
+        },
+      );
     } catch (error) {
       setWebsiteReviews(previousReviews);
       window.alert(getApiError(error, "Review delete failed."));
@@ -589,7 +822,9 @@ export default function DashboardPage() {
 
   const updateWebsiteOrderStatus = (orderId: string, status: string) => {
     setWebsiteOrders((current) =>
-      current.map((order) => (order.id === orderId ? { ...order, status } : order))
+      current.map((order) =>
+        order.id === orderId ? { ...order, status } : order,
+      ),
     );
 
     void apiRequest<WebsiteOrder>(`/api/orders/${orderId}/status`, {
@@ -598,7 +833,7 @@ export default function DashboardPage() {
     })
       .then((updatedOrder) => {
         setWebsiteOrders((current) =>
-          current.map((order) => (order.id === orderId ? updatedOrder : order))
+          current.map((order) => (order.id === orderId ? updatedOrder : order)),
         );
       })
       .catch(() => undefined);
@@ -610,12 +845,17 @@ export default function DashboardPage() {
     if (!shouldDelete) return;
 
     const previousOrders = websiteOrders;
-    setWebsiteOrders((current) => current.filter((order) => order.id !== orderId));
+    setWebsiteOrders((current) =>
+      current.filter((order) => order.id !== orderId),
+    );
 
     try {
-      await apiRequest<{ ok: boolean; order: WebsiteOrder }>(`/api/orders/${orderId}`, {
-        method: "DELETE",
-      });
+      await apiRequest<{ ok: boolean; order: WebsiteOrder }>(
+        `/api/orders/${orderId}`,
+        {
+          method: "DELETE",
+        },
+      );
     } catch (error) {
       setWebsiteOrders(previousOrders);
       window.alert(getApiError(error, "Order delete failed."));
@@ -689,7 +929,9 @@ export default function DashboardPage() {
 
           <div className="mt-8 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] p-4">
             <p className="text-sm font-bold text-[#7c2d12]">Logged in</p>
-            <p className="mt-1 truncate text-sm text-[#9a3412]">{admin.email}</p>
+            <p className="mt-1 truncate text-sm text-[#9a3412]">
+              {admin.email}
+            </p>
             <button
               type="button"
               onClick={handleAdminLogout}
@@ -744,21 +986,78 @@ export default function DashboardPage() {
 
           {activeMenu === "overview" && (
             <section className="mt-6 space-y-6">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-                <MetricCard title="মোট বিক্রি" value={`${toBanglaNumber(totalRevenue)} টাকা`} note="রিয়েল অর্ডার থেকে" icon={<BarChart3 className="h-5 w-5" />} />
-                <MetricCard title="অর্ডার" value={toBanglaNumber(websiteOrders.length)} note="ওয়েবসাইট অর্ডার" icon={<ClipboardList className="h-5 w-5" />} />
-                <MetricCard title="ইউজার" value={toBanglaNumber(websiteUsers.length)} note="সাইন আপ ইউজার" icon={<Users className="h-5 w-5" />} />
-                <MetricCard title="রিভিউ" value={toBanglaNumber(websiteReviews.length)} note={`${toBanglaNumber(publishedReviewCount)} প্রকাশিত`} icon={<MessageSquare className="h-5 w-5" />} />
-                <MetricCard title="প্রোডাক্ট" value={toBanglaNumber(products.length)} note={`${toBanglaNumber(totalStock)} স্টক`} icon={<Boxes className="h-5 w-5" />} />
-                <MetricCard title="লো স্টক" value={toBanglaNumber(lowStockCount)} note="স্টক দেখা দরকার" icon={<PackagePlus className="h-5 w-5" />} />
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
+                <MetricCard
+                  title="মোট বিক্রি"
+                  value={`${toBanglaNumber(totalRevenue)} টাকা`}
+                  note="রিয়েল অর্ডার থেকে"
+                  icon={<BarChart3 className="h-5 w-5" />}
+                />
+                <MetricCard
+                  title="Actual Profit"
+                  value={`${toBanglaNumber(actualProfit)} টাকা`}
+                  note={`ক্যারেট ${toBanglaNumber(CARET_COST_PER_ORDER)} + ডেলিভারি ${toBanglaNumber(DELIVERY_COST_PER_ORDER)} বাদ`}
+                  icon={<ShoppingBag className="h-5 w-5" />}
+                />
+                <MetricCard
+                  title="অর্ডার"
+                  value={toBanglaNumber(websiteOrders.length)}
+                  note="ওয়েবসাইট অর্ডার"
+                  icon={<ClipboardList className="h-5 w-5" />}
+                />
+                <MetricCard
+                  title="ইউজার"
+                  value={toBanglaNumber(websiteUsers.length)}
+                  note="সাইন আপ ইউজার"
+                  icon={<Users className="h-5 w-5" />}
+                />
+                <MetricCard
+                  title="রিভিউ"
+                  value={toBanglaNumber(websiteReviews.length)}
+                  note={`${toBanglaNumber(publishedReviewCount)} প্রকাশিত`}
+                  icon={<MessageSquare className="h-5 w-5" />}
+                />
+                <MetricCard
+                  title="প্রোডাক্ট"
+                  value={toBanglaNumber(products.length)}
+                  note={`${toBanglaNumber(totalStock)} স্টক`}
+                  icon={<Boxes className="h-5 w-5" />}
+                />
+                <MetricCard
+                  title="লো স্টক"
+                  value={toBanglaNumber(lowStockCount)}
+                  note="স্টক দেখা দরকার"
+                  icon={<PackagePlus className="h-5 w-5" />}
+                />
               </div>
 
+              <ProfitChart
+                rows={orderProfitRows.slice(0, 12).reverse()}
+                totalProfit={actualProfit}
+                totalProductCost={totalProductCost}
+                totalOperationalCost={totalOperationalCost}
+              />
+
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
-                <Panel title="সাম্প্রতিক অর্ডার" action={`${toBanglaNumber(websiteOrders.length)}টি`}>
-                  <OrderList orders={websiteOrders.slice(0, 5)} onStatusChange={updateWebsiteOrderStatus} onDelete={deleteWebsiteOrder} />
+                <Panel
+                  title="সাম্প্রতিক অর্ডার"
+                  action={`${toBanglaNumber(websiteOrders.length)}টি`}
+                >
+                  <OrderList
+                    orders={websiteOrders.slice(0, 5)}
+                    onStatusChange={updateWebsiteOrderStatus}
+                    onDelete={deleteWebsiteOrder}
+                  />
                 </Panel>
-                <Panel title="লো স্টক প্রোডাক্ট" action={`${toBanglaNumber(lowStockCount)}টি`}>
-                  <ProductList products={products.filter(isLowStock).slice(0, 5)} onEdit={openEditProduct} compact />
+                <Panel
+                  title="লো স্টক প্রোডাক্ট"
+                  action={`${toBanglaNumber(lowStockCount)}টি`}
+                >
+                  <ProductList
+                    products={products.filter(isLowStock).slice(0, 5)}
+                    onEdit={openEditProduct}
+                    compact
+                  />
                 </Panel>
               </div>
             </section>
@@ -766,15 +1065,25 @@ export default function DashboardPage() {
 
           {activeMenu === "orders" && (
             <section className="mt-6">
-              <Panel title="ওয়েবসাইট অর্ডার" action={`${toBanglaNumber(websiteOrders.length)}টি`}>
-                <OrderList orders={websiteOrders} onStatusChange={updateWebsiteOrderStatus} onDelete={deleteWebsiteOrder} />
+              <Panel
+                title="ওয়েবসাইট অর্ডার"
+                action={`${toBanglaNumber(websiteOrders.length)}টি`}
+              >
+                <OrderList
+                  orders={websiteOrders}
+                  onStatusChange={updateWebsiteOrderStatus}
+                  onDelete={deleteWebsiteOrder}
+                />
               </Panel>
             </section>
           )}
 
           {activeMenu === "users" && (
             <section className="mt-6">
-              <Panel title="সাইন আপ ইউজার" action={`${toBanglaNumber(websiteUsers.length)} জন`}>
+              <Panel
+                title="সাইন আপ ইউজার"
+                action={`${toBanglaNumber(websiteUsers.length)} জন`}
+              >
                 <UserList users={websiteUsers} />
               </Panel>
             </section>
@@ -782,7 +1091,10 @@ export default function DashboardPage() {
 
           {activeMenu === "reviews" && (
             <section className="mt-6">
-              <Panel title="রিভিউ ম্যানেজমেন্ট" action={`${toBanglaNumber(filteredReviews.length)}টি`}>
+              <Panel
+                title="রিভিউ ম্যানেজমেন্ট"
+                action={`${toBanglaNumber(filteredReviews.length)}টি`}
+              >
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex h-11 flex-1 items-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fffaf6] px-4">
                     <Search className="h-4 w-4 text-primary" />
@@ -819,7 +1131,10 @@ export default function DashboardPage() {
 
           {activeMenu === "products" && (
             <section className="mt-6">
-              <Panel title="প্রোডাক্ট তালিকা" action={`${toBanglaNumber(filteredProducts.length)}টি`}>
+              <Panel
+                title="প্রোডাক্ট তালিকা"
+                action={`${toBanglaNumber(filteredProducts.length)}টি`}
+              >
                 <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex h-11 flex-1 items-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fffaf6] px-4">
                     <Search className="h-4 w-4 text-primary" />
@@ -839,33 +1154,57 @@ export default function DashboardPage() {
                     যোগ করুন
                   </button>
                 </div>
-                <ProductList products={filteredProducts} onEdit={openEditProduct} />
+                <ProductList
+                  products={filteredProducts}
+                  onEdit={openEditProduct}
+                />
               </Panel>
             </section>
           )}
 
           {activeMenu === "analytics" && (
-            <section className="mt-6 grid gap-6 xl:grid-cols-2">
-              <Panel title="পেমেন্ট সামারি" action="রিয়েল ডাটা">
-                {paymentSummary.length > 0 ? (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {paymentSummary.map((item) => (
-                      <div key={item.method} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
-                        <p className="text-sm font-semibold text-[#9a3412]">{item.method}</p>
-                        <h3 className="mt-2 text-2xl font-bold text-[#7c2d12]">
-                          {toBanglaNumber(item.total)} টাকা
-                        </h3>
-                        <p className="mt-1 text-sm text-[#9a3412]">{toBanglaNumber(item.count)} অর্ডার</p>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="এখনো অ্যানালিটিক্স ডাটা নেই" />
-                )}
-              </Panel>
-              <Panel title="প্রোডাক্ট পারফরম্যান্স" action={`${toBanglaNumber(totalSales)} বিক্রি`}>
-                <SimpleBars products={products.slice(0, 8)} />
-              </Panel>
+            <section className="mt-6 space-y-6">
+              <ProfitChart
+                rows={orderProfitRows.slice(0, 16).reverse()}
+                totalProfit={actualProfit}
+                totalProductCost={totalProductCost}
+                totalOperationalCost={totalOperationalCost}
+              />
+              <div className="grid gap-6 xl:grid-cols-2">
+                <Panel title="পেমেন্ট সামারি" action="রিয়েল ডাটা">
+                  {paymentSummary.length > 0 ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {paymentSummary.map((item) => (
+                        <div
+                          key={item.method}
+                          className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4"
+                        >
+                          <p className="text-sm font-semibold text-[#9a3412]">
+                            {item.method}
+                          </p>
+                          <h3 className="mt-2 text-2xl font-bold text-[#7c2d12]">
+                            {toBanglaNumber(item.total)} টাকা
+                          </h3>
+                          <p className="mt-1 text-sm text-[#9a3412]">
+                            {toBanglaNumber(item.count)} অর্ডার
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      icon={<BarChart3 className="h-8 w-8" />}
+                      title="এখনো অ্যানালিটিক্স ডাটা নেই"
+                    />
+                  )}
+                </Panel>
+                <Panel
+                  title="প্রোডাক্ট পারফরম্যান্স"
+                  action={`${toBanglaNumber(totalSales)} বিক্রি`}
+                >
+                  <SimpleBars products={products.slice(0, 8)} />
+                </Panel>
+              </div>
             </section>
           )}
 
@@ -875,7 +1214,10 @@ export default function DashboardPage() {
                 <div className="grid gap-4 md:grid-cols-3">
                   <SettingCard title="স্টোর নাম" value="সাতক্ষীরার আম" />
                   <SettingCard title="সাপোর্ট নম্বর" value="+8801779024048" />
-                  <SettingCard title="API Mode" value={process.env.NEXT_PUBLIC_API_URL ?? "Local"} />
+                  <SettingCard
+                    title="API Mode"
+                    value={process.env.NEXT_PUBLIC_API_URL ?? "Local"}
+                  />
                 </div>
               </Panel>
             </section>
@@ -924,31 +1266,56 @@ function AdminLoginPage({
 }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#fffaf6] px-4 py-8">
-      <form onSubmit={onSubmit} className="w-full max-w-[440px] rounded-3xl border border-[#fed7aa] bg-white p-6 shadow-soft">
+      <form
+        onSubmit={onSubmit}
+        className="w-full max-w-[440px] rounded-3xl border border-[#fed7aa] bg-white p-6 shadow-soft"
+      >
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#fff1e8] text-primary">
             <LockKeyhole className="h-6 w-6" />
           </div>
           <div>
             <p className="text-sm font-semibold text-primary">Admin Access</p>
-            <h1 className="text-2xl font-bold text-[#7c2d12]">Dashboard Login</h1>
+            <h1 className="text-2xl font-bold text-[#7c2d12]">
+              Dashboard Login
+            </h1>
           </div>
         </div>
 
         <div className="space-y-4">
           <Field label="Email">
-            <input required type="email" value={form.email} onChange={(event) => onChange("email", event.target.value)} className="field" placeholder="admin@satkhiraramm.com" />
+            <input
+              required
+              type="email"
+              value={form.email}
+              onChange={(event) => onChange("email", event.target.value)}
+              className="field"
+              placeholder="admin@satkhiraramm.com"
+            />
           </Field>
           <Field label="Password">
-            <input required type="password" value={form.password} onChange={(event) => onChange("password", event.target.value)} className="field" placeholder="Admin password" />
+            <input
+              required
+              type="password"
+              value={form.password}
+              onChange={(event) => onChange("password", event.target.value)}
+              className="field"
+              placeholder="Admin password"
+            />
           </Field>
         </div>
 
         {error && (
-          <p className="mt-4 rounded-2xl bg-[#fff1e8] px-4 py-3 text-sm font-semibold text-[#9a3412]">{error}</p>
+          <p className="mt-4 rounded-2xl bg-[#fff1e8] px-4 py-3 text-sm font-semibold text-[#9a3412]">
+            {error}
+          </p>
         )}
 
-        <button type="submit" disabled={isSubmitting} className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-base font-semibold text-white transition hover:bg-[#ea580c] disabled:cursor-not-allowed disabled:bg-[#fdba74]">
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3.5 text-base font-semibold text-white transition hover:bg-[#ea580c] disabled:cursor-not-allowed disabled:bg-[#fdba74]"
+        >
           <ShieldCheck className="h-5 w-5" />
           {isSubmitting ? "Signing in" : "Sign in"}
         </button>
@@ -969,75 +1336,196 @@ function ProductFormModal({
   productForm: ProductForm;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onChange: <Key extends keyof ProductForm>(key: Key, value: ProductForm[Key]) => void;
+  onChange: <Key extends keyof ProductForm>(
+    key: Key,
+    value: ProductForm[Key],
+  ) => void;
   onImageChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#2d1204]/50 px-4 py-6">
-      <form onSubmit={onSubmit} className="max-h-[calc(100vh-3rem)] w-full max-w-[680px] overflow-y-auto rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-[0_30px_90px_rgba(45,18,4,0.25)] sm:p-6">
+      <form
+        onSubmit={onSubmit}
+        className="max-h-[calc(100vh-3rem)] w-full max-w-[680px] overflow-y-auto rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-[0_30px_90px_rgba(45,18,4,0.25)] sm:p-6"
+      >
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold text-primary">Product Management</p>
+            <p className="text-sm font-semibold text-primary">
+              Product Management
+            </p>
             <h2 className="mt-1 text-2xl font-bold text-[#7c2d12]">
-              {editingProduct ? "প্রোডাক্ট এডিট করুন" : "নতুন প্রোডাক্ট যোগ করুন"}
+              {editingProduct
+                ? "প্রোডাক্ট এডিট করুন"
+                : "নতুন প্রোডাক্ট যোগ করুন"}
             </h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-[#fed7aa] bg-[#fff7f1] p-2 text-[#7c2d12]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-[#fed7aa] bg-[#fff7f1] p-2 text-[#7c2d12]"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="প্রোডাক্ট নাম">
-            <input required value={productForm.name} onChange={(event) => onChange("name", event.target.value)} className="field" />
+            <input
+              required
+              value={productForm.name}
+              onChange={(event) => onChange("name", event.target.value)}
+              className="field"
+            />
           </Field>
           <Field label="ক্যাটাগরি">
-            <select value={productForm.category} onChange={(event) => onChange("category", event.target.value)} className="field">
-              <option>আম</option>
-              <option>গুড়</option>
-              <option>চারা</option>
-              <option>আচার</option>
-              <option>তেল</option>
-              <option>মধু</option>
+            <select
+              value={productForm.category}
+              onChange={(event) => {
+                const selectedMenu = getProductMenuByCategory(
+                  event.target.value,
+                );
+                onChange("category", event.target.value);
+                if (selectedMenu) {
+                  onChange("menuSlug", selectedMenu.slug);
+                }
+              }}
+              className="field"
+            >
+              {productMenuOptions.map((option) => (
+                <option key={option.category}>{option.category}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="কোন মেনুতে দেখাবে">
+            <select
+              value={productForm.menuSlug ?? "mango"}
+              onChange={(event) => {
+                const selectedMenu = getProductMenuBySlug(event.target.value);
+                onChange("menuSlug", event.target.value);
+                if (selectedMenu) {
+                  onChange("category", selectedMenu.category);
+                }
+              }}
+              className="field"
+            >
+              {productMenuOptions.map((option) => (
+                <option key={option.slug} value={option.slug}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </Field>
           <Field label="ভ্যারাইটি / সাবটাইটেল">
-            <input value={productForm.variety ?? ""} onChange={(event) => onChange("variety", event.target.value)} className="field" />
+            <input
+              value={productForm.variety ?? ""}
+              onChange={(event) => onChange("variety", event.target.value)}
+              className="field"
+            />
           </Field>
           <Field label="ইউনিট">
-            <input required value={productForm.unit} onChange={(event) => onChange("unit", event.target.value)} className="field" />
+            <input
+              required
+              value={productForm.unit}
+              onChange={(event) => onChange("unit", event.target.value)}
+              className="field"
+            />
           </Field>
-          <Field label="দাম">
-            <input required type="number" min={0} value={productForm.price} onChange={(event) => onChange("price", Number(event.target.value))} className="field" />
+          <Field label="ক্রয় মূল্য">
+            <input
+              required
+              type="number"
+              min={0}
+              value={productForm.purchasePrice ?? 0}
+              onChange={(event) =>
+                onChange("purchasePrice", Number(event.target.value))
+              }
+              className="field"
+            />
+          </Field>
+          <Field label="বিক্রয় মূল্য">
+            <input
+              required
+              type="number"
+              min={0}
+              value={productForm.price}
+              onChange={(event) =>
+                onChange("price", Number(event.target.value))
+              }
+              className="field"
+            />
           </Field>
           <Field label="স্টক">
-            <input required type="number" min={0} value={productForm.stock} onChange={(event) => onChange("stock", Number(event.target.value))} className="field" />
+            <input
+              required
+              type="number"
+              min={0}
+              value={productForm.stock}
+              onChange={(event) =>
+                onChange("stock", Number(event.target.value))
+              }
+              className="field"
+            />
           </Field>
           <Field label="স্ট্যাটাস">
-            <select value={productForm.status} onChange={(event) => onChange("status", event.target.value as ProductStatus)} className="field">
+            <select
+              value={productForm.status}
+              onChange={(event) =>
+                onChange("status", event.target.value as ProductStatus)
+              }
+              className="field"
+            >
               <option>স্টক আছে</option>
               <option>স্টক কম</option>
               <option>শীঘ্রই আসছে</option>
               <option>বন্ধ</option>
             </select>
           </Field>
-          <Field label="ডিসকাউন্ট লেবেল">
-            <input value={productForm.discountLabel ?? ""} onChange={(event) => onChange("discountLabel", event.target.value)} className="field" />
+          <Field label="ডিসকাউন্ট মূল্য">
+            <input
+              type="number"
+              min={0}
+              value={productForm.discountAmount ?? 0}
+              onChange={(event) =>
+                onChange("discountAmount", Number(event.target.value))
+              }
+              className="field"
+            />
+            {Number(productForm.discountAmount || 0) > 0 && (
+              <span className="mt-2 block text-xs font-bold text-primary">
+                কার্ডে দেখাবে: {getDiscountLabel(Number(productForm.discountAmount || 0))}
+              </span>
+            )}
           </Field>
           <div className="sm:col-span-2">
             <Field label="শর্ট নোট">
-              <textarea rows={3} value={productForm.shortNote ?? ""} onChange={(event) => onChange("shortNote", event.target.value)} className="field min-h-[96px] py-3" />
+              <textarea
+                rows={3}
+                value={productForm.shortNote ?? ""}
+                onChange={(event) => onChange("shortNote", event.target.value)}
+                className="field min-h-[96px] py-3"
+              />
             </Field>
           </div>
           <div className="sm:col-span-2">
             <Field label="প্রোডাক্ট ছবি">
               <div className="grid gap-4 sm:grid-cols-[160px_1fr] sm:items-center">
-                <ProductImage image={productForm.image} name={productForm.name || "Product"} size="large" />
+                <ProductImage
+                  image={productForm.image}
+                  name={productForm.name || "Product"}
+                  size="large"
+                />
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-5 text-center text-[#7c2d12] transition hover:border-primary">
                   <ImagePlus className="h-7 w-7 text-primary" />
                   <span className="mt-2 text-sm font-bold">ছবি আপলোড করুন</span>
-                  <span className="mt-1 text-xs text-[#9a3412]">JPG, PNG অথবা WebP</span>
-                  <input type="file" accept="image/*" onChange={onImageChange} className="sr-only" />
+                  <span className="mt-1 text-xs text-[#9a3412]">
+                    JPG, PNG অথবা WebP
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={onImageChange}
+                    className="sr-only"
+                  />
                 </label>
               </div>
             </Field>
@@ -1048,7 +1536,9 @@ function ProductFormModal({
                 <input
                   type="checkbox"
                   checked={productForm.isActive ?? true}
-                  onChange={(event) => onChange("isActive", event.target.checked)}
+                  onChange={(event) =>
+                    onChange("isActive", event.target.checked)
+                  }
                   className="h-5 w-5 accent-[#f97316]"
                 />
                 ওয়েবসাইটে দেখান
@@ -1057,7 +1547,9 @@ function ProductFormModal({
                 <input
                   type="checkbox"
                   checked={productForm.isFeatured ?? true}
-                  onChange={(event) => onChange("isFeatured", event.target.checked)}
+                  onChange={(event) =>
+                    onChange("isFeatured", event.target.checked)
+                  }
                   className="h-5 w-5 accent-[#f97316]"
                 />
                 ফিচার্ড প্রোডাক্ট
@@ -1067,10 +1559,17 @@ function ProductFormModal({
         </div>
 
         <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className="rounded-2xl border border-[#fed7aa] bg-white px-5 py-3 font-semibold text-[#7c2d12]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-2xl border border-[#fed7aa] bg-white px-5 py-3 font-semibold text-[#7c2d12]"
+          >
             বাতিল
           </button>
-          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 font-semibold text-white">
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 font-semibold text-white"
+          >
             <CheckCircle2 className="h-5 w-5" />
             সংরক্ষণ করুন
           </button>
@@ -1093,37 +1592,68 @@ function ReviewFormModal({
   reviewForm: ReviewForm;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onChange: <Key extends keyof ReviewForm>(key: Key, value: ReviewForm[Key]) => void;
+  onChange: <Key extends keyof ReviewForm>(
+    key: Key,
+    value: ReviewForm[Key],
+  ) => void;
   onMediaChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onMediaClear: () => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#2d1204]/50 px-4 py-6">
-      <form onSubmit={onSubmit} className="max-h-[calc(100vh-3rem)] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-[0_30px_90px_rgba(45,18,4,0.25)] sm:p-6">
+      <form
+        onSubmit={onSubmit}
+        className="max-h-[calc(100vh-3rem)] w-full max-w-[720px] overflow-y-auto rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-[0_30px_90px_rgba(45,18,4,0.25)] sm:p-6"
+      >
         <div className="mb-5 flex items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold text-primary">Review Management</p>
+            <p className="text-sm font-semibold text-primary">
+              Review Management
+            </p>
             <h2 className="mt-1 text-2xl font-bold text-[#7c2d12]">
               {editingReview ? "রিভিউ এডিট করুন" : "নতুন রিভিউ যোগ করুন"}
             </h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-[#fed7aa] bg-[#fff7f1] p-2 text-[#7c2d12]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-[#fed7aa] bg-[#fff7f1] p-2 text-[#7c2d12]"
+          >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="নাম">
-            <input required value={reviewForm.name} onChange={(event) => onChange("name", event.target.value)} className="field" />
+            <input
+              required
+              value={reviewForm.name}
+              onChange={(event) => onChange("name", event.target.value)}
+              className="field"
+            />
           </Field>
           <Field label="মোবাইল">
-            <input value={reviewForm.phone} onChange={(event) => onChange("phone", event.target.value)} className="field" />
+            <input
+              value={reviewForm.phone}
+              onChange={(event) => onChange("phone", event.target.value)}
+              className="field"
+            />
           </Field>
           <Field label="লোকেশন">
-            <input value={reviewForm.location} onChange={(event) => onChange("location", event.target.value)} className="field" />
+            <input
+              value={reviewForm.location}
+              onChange={(event) => onChange("location", event.target.value)}
+              className="field"
+            />
           </Field>
           <Field label="রেটিং">
-            <select value={reviewForm.rating} onChange={(event) => onChange("rating", Number(event.target.value))} className="field">
+            <select
+              value={reviewForm.rating}
+              onChange={(event) =>
+                onChange("rating", Number(event.target.value))
+              }
+              className="field"
+            >
               <option value={5}>৫ স্টার</option>
               <option value={4}>৪ স্টার</option>
               <option value={3}>৩ স্টার</option>
@@ -1132,18 +1662,34 @@ function ReviewFormModal({
             </select>
           </Field>
           <Field label="স্ট্যাটাস">
-            <select value={reviewForm.status} onChange={(event) => onChange("status", event.target.value as ReviewStatus)} className="field">
+            <select
+              value={reviewForm.status}
+              onChange={(event) =>
+                onChange("status", event.target.value as ReviewStatus)
+              }
+              className="field"
+            >
               <option value="published">প্রকাশিত</option>
               <option value="pending">অপেক্ষমাণ</option>
               <option value="hidden">লুকানো</option>
             </select>
           </Field>
           <Field label="শিরোনাম">
-            <input value={reviewForm.title} onChange={(event) => onChange("title", event.target.value)} className="field" />
+            <input
+              value={reviewForm.title}
+              onChange={(event) => onChange("title", event.target.value)}
+              className="field"
+            />
           </Field>
           <div className="sm:col-span-2">
             <Field label="রিভিউ">
-              <textarea required rows={4} value={reviewForm.message} onChange={(event) => onChange("message", event.target.value)} className="field min-h-[128px] py-3" />
+              <textarea
+                required
+                rows={4}
+                value={reviewForm.message}
+                onChange={(event) => onChange("message", event.target.value)}
+                className="field min-h-[128px] py-3"
+              />
             </Field>
           </div>
           <div className="sm:col-span-2">
@@ -1153,9 +1699,18 @@ function ReviewFormModal({
                 <div className="grid gap-3">
                   <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-5 text-center text-[#7c2d12] transition hover:border-primary">
                     <Upload className="h-7 w-7 text-primary" />
-                    <span className="mt-2 text-sm font-bold">মিডিয়া আপলোড করুন</span>
-                    <span className="mt-1 text-xs text-[#9a3412]">ছবি অথবা ভিডিও, সর্বোচ্চ ৮ MB</span>
-                    <input type="file" accept="image/*,video/*" onChange={onMediaChange} className="sr-only" />
+                    <span className="mt-2 text-sm font-bold">
+                      মিডিয়া আপলোড করুন
+                    </span>
+                    <span className="mt-1 text-xs text-[#9a3412]">
+                      ছবি অথবা ভিডিও, সর্বোচ্চ ৮ MB
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      onChange={onMediaChange}
+                      className="sr-only"
+                    />
                   </label>
                   {reviewForm.media && (
                     <button
@@ -1174,10 +1729,17 @@ function ReviewFormModal({
         </div>
 
         <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <button type="button" onClick={onClose} className="rounded-2xl border border-[#fed7aa] bg-white px-5 py-3 font-semibold text-[#7c2d12]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-2xl border border-[#fed7aa] bg-white px-5 py-3 font-semibold text-[#7c2d12]"
+          >
             বাতিল
           </button>
-          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 font-semibold text-white">
+          <button
+            type="submit"
+            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-primary px-5 py-3 font-semibold text-white"
+          >
             <CheckCircle2 className="h-5 w-5" />
             সংরক্ষণ করুন
           </button>
@@ -1187,10 +1749,22 @@ function ReviewFormModal({
   );
 }
 
-function MetricCard({ title, value, note, icon }: { title: string; value: string; note: string; icon: ReactNode }) {
+function MetricCard({
+  title,
+  value,
+  note,
+  icon,
+}: {
+  title: string;
+  value: string;
+  note: string;
+  icon: ReactNode;
+}) {
   return (
     <div className="rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-soft">
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#fff1e8] text-primary">{icon}</div>
+      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#fff1e8] text-primary">
+        {icon}
+      </div>
       <p className="mt-5 text-sm font-semibold text-[#9a3412]">{title}</p>
       <h3 className="mt-1 text-2xl font-bold text-[#7c2d12]">{value}</h3>
       <p className="mt-2 text-sm text-[#9a3412]">{note}</p>
@@ -1198,12 +1772,22 @@ function MetricCard({ title, value, note, icon }: { title: string; value: string
   );
 }
 
-function Panel({ title, action, children }: { title: string; action: string; children: ReactNode }) {
+function Panel({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action: string;
+  children: ReactNode;
+}) {
   return (
     <section className="rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-soft">
       <div className="mb-5 flex items-center justify-between gap-4">
         <h2 className="text-xl font-bold text-[#7c2d12]">{title}</h2>
-        <span className="rounded-full bg-[#fff1e8] px-3 py-1 text-xs font-bold text-primary">{action}</span>
+        <span className="rounded-full bg-[#fff1e8] px-3 py-1 text-xs font-bold text-primary">
+          {action}
+        </span>
       </div>
       {children}
     </section>
@@ -1220,7 +1804,12 @@ function OrderList({
   onDelete: (orderId: string) => void;
 }) {
   if (orders.length === 0) {
-    return <EmptyState icon={<ClipboardList className="h-8 w-8" />} title="এখনো কোনো অর্ডার নেই" />;
+    return (
+      <EmptyState
+        icon={<ClipboardList className="h-8 w-8" />}
+        title="এখনো কোনো অর্ডার নেই"
+      />
+    );
   }
 
   return (
@@ -1230,7 +1819,10 @@ function OrderList({
         const paymentDetails = getPaymentDetails(order.payment);
 
         return (
-          <div key={order.id} className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
+          <div
+            key={order.id}
+            className="rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4"
+          >
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -1246,12 +1838,21 @@ function OrderList({
                   </p>
                 )}
                 <p className="mt-2 text-sm font-semibold text-primary">
-                  {order.items.map((item) => `${item.name} x ${toBanglaNumber(item.quantity)}`).join(", ")}
+                  {order.items
+                    .map(
+                      (item) =>
+                        `${item.name} x ${toBanglaNumber(item.quantity)}`,
+                    )
+                    .join(", ")}
                 </p>
               </div>
               <div className="min-w-[220px] text-left lg:text-right">
-                <p className="text-xl font-bold text-[#7c2d12]">{toBanglaNumber(order.total)} টাকা</p>
-                <p className="mt-1 text-sm text-[#9a3412]">{order.payment.method}</p>
+                <p className="text-xl font-bold text-[#7c2d12]">
+                  {toBanglaNumber(order.total)} টাকা
+                </p>
+                <p className="mt-1 text-sm text-[#9a3412]">
+                  {order.payment.method}
+                </p>
                 {paymentDetails && (
                   <p className="mt-1 break-words text-xs font-semibold text-primary">
                     {paymentDetails}
@@ -1259,7 +1860,12 @@ function OrderList({
                 )}
                 <div className="mt-3 flex gap-2 lg:justify-end">
                   {["প্রসেসিং", "ডেলিভারিতে", "সম্পন্ন"].map((status) => (
-                    <button key={status} type="button" onClick={() => onStatusChange(order.id, status)} className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12] hover:border-primary">
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => onStatusChange(order.id, status)}
+                      className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12] hover:border-primary"
+                    >
                       {status}
                     </button>
                   ))}
@@ -1283,7 +1889,9 @@ function OrderList({
 
 function UserList({ users }: { users: WebsiteUser[] }) {
   if (users.length === 0) {
-    return <EmptyState icon={<Users className="h-8 w-8" />} title="কোনো ইউজার নেই" />;
+    return (
+      <EmptyState icon={<Users className="h-8 w-8" />} title="কোনো ইউজার নেই" />
+    );
   }
 
   return (
@@ -1299,13 +1907,24 @@ function UserList({ users }: { users: WebsiteUser[] }) {
           const displayEmail = getDisplayUserEmail(user.email);
 
           return (
-            <div key={user.id || user.phone || user.email} className="grid gap-3 bg-[#fffaf6] px-4 py-4 md:grid-cols-[1.2fr_1fr_1.3fr_130px] md:items-center">
+            <div
+              key={user.id || user.phone || user.email}
+              className="grid gap-3 bg-[#fffaf6] px-4 py-4 md:grid-cols-[1.2fr_1fr_1.3fr_130px] md:items-center"
+            >
               <div className="min-w-0">
-                <p className="font-bold text-[#7c2d12]">{user.name || "নাম নেই"}</p>
-                <p className="mt-1 text-xs font-bold text-primary">Joined: {user.joinedAt || "N/A"}</p>
+                <p className="font-bold text-[#7c2d12]">
+                  {user.name || "নাম নেই"}
+                </p>
+                <p className="mt-1 text-xs font-bold text-primary">
+                  Joined: {user.joinedAt || "N/A"}
+                </p>
               </div>
-              <p className="break-words text-sm font-semibold text-[#9a3412]">{user.phone || "N/A"}</p>
-              <p className="break-all text-sm font-semibold text-[#7c2d12]">{displayEmail || "ইমেইল নেই"}</p>
+              <p className="break-words text-sm font-semibold text-[#9a3412]">
+                {user.phone || "N/A"}
+              </p>
+              <p className="break-all text-sm font-semibold text-[#7c2d12]">
+                {displayEmail || "ইমেইল নেই"}
+              </p>
               <StatusBadge label={user.status || "নতুন"} />
             </div>
           );
@@ -1327,48 +1946,78 @@ function ReviewList({
   onStatusChange: (reviewId: string, status: ReviewStatus) => void;
 }) {
   if (reviews.length === 0) {
-    return <EmptyState icon={<MessageSquare className="h-8 w-8" />} title="কোনো রিভিউ নেই" />;
+    return (
+      <EmptyState
+        icon={<MessageSquare className="h-8 w-8" />}
+        title="কোনো রিভিউ নেই"
+      />
+    );
   }
 
   return (
     <div className="space-y-3">
       {reviews.map((review) => (
-        <div key={review.id} className="grid gap-4 rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4 xl:grid-cols-[96px_minmax(0,1fr)_auto] xl:items-start">
+        <div
+          key={review.id}
+          className="grid gap-4 rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4 xl:grid-cols-[96px_minmax(0,1fr)_auto] xl:items-start"
+        >
           <ReviewMediaPreview media={review.media} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-bold text-[#7c2d12]">{review.title || review.name}</h3>
+              <h3 className="font-bold text-[#7c2d12]">
+                {review.title || review.name}
+              </h3>
               <StatusBadge label={getReviewStatusLabel(review.status)} />
               <ReviewRating rating={review.rating} />
             </div>
             <p className="mt-1 text-sm text-[#9a3412]">
-              {review.name} {review.phone ? `· ${review.phone}` : ""} {review.location ? `· ${review.location}` : ""}
+              {review.name} {review.phone ? `· ${review.phone}` : ""}{" "}
+              {review.location ? `· ${review.location}` : ""}
             </p>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-[#7c2d12]">
               {review.message}
             </p>
             {review.media?.name && (
               <p className="mt-2 text-xs font-bold text-primary">
-                {review.media.name} {formatFileSize(review.media.size) ? `· ${formatFileSize(review.media.size)}` : ""}
+                {review.media.name}{" "}
+                {formatFileSize(review.media.size)
+                  ? `· ${formatFileSize(review.media.size)}`
+                  : ""}
               </p>
             )}
           </div>
           <div className="flex flex-wrap gap-2 xl:justify-end">
             {review.status !== "published" && (
-              <button type="button" onClick={() => onStatusChange(review.id, "published")} className="rounded-xl border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs font-bold text-[#166534]">
+              <button
+                type="button"
+                onClick={() => onStatusChange(review.id, "published")}
+                className="rounded-xl border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-xs font-bold text-[#166534]"
+              >
                 প্রকাশ
               </button>
             )}
             {review.status !== "hidden" && (
-              <button type="button" onClick={() => onStatusChange(review.id, "hidden")} className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12]">
+              <button
+                type="button"
+                onClick={() => onStatusChange(review.id, "hidden")}
+                className="rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12]"
+              >
                 লুকান
               </button>
             )}
-            <button type="button" onClick={() => onEdit(review)} className="inline-flex items-center justify-center gap-1 rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12]">
+            <button
+              type="button"
+              onClick={() => onEdit(review)}
+              className="inline-flex items-center justify-center gap-1 rounded-xl border border-[#fed7aa] bg-white px-3 py-2 text-xs font-bold text-[#7c2d12]"
+            >
               <Edit3 className="h-3.5 w-3.5" />
               এডিট
             </button>
-            <button type="button" onClick={() => onDelete(review.id)} className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400">
+            <button
+              type="button"
+              onClick={() => onDelete(review.id)}
+              className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400"
+            >
               <Trash2 className="h-3.5 w-3.5" />
               ডিলিট
             </button>
@@ -1379,15 +2028,31 @@ function ReviewList({
   );
 }
 
-function ProductList({ products, onEdit, compact = false }: { products: Product[]; onEdit: (product: Product) => void; compact?: boolean }) {
+function ProductList({
+  products,
+  onEdit,
+  compact = false,
+}: {
+  products: Product[];
+  onEdit: (product: Product) => void;
+  compact?: boolean;
+}) {
   if (products.length === 0) {
-    return <EmptyState icon={<Boxes className="h-8 w-8" />} title="কোনো প্রোডাক্ট নেই" />;
+    return (
+      <EmptyState
+        icon={<Boxes className="h-8 w-8" />}
+        title="কোনো প্রোডাক্ট নেই"
+      />
+    );
   }
 
   return (
     <div className={compact ? "space-y-3" : "grid gap-3 xl:grid-cols-2"}>
       {products.map((product) => (
-        <div key={product.id} className="grid gap-3 rounded-2xl border border-[#fed7aa] bg-white p-3 sm:grid-cols-[74px_1fr_auto] sm:items-center">
+        <div
+          key={product.id}
+          className="grid gap-3 rounded-2xl border border-[#fed7aa] bg-white p-3 sm:grid-cols-[74px_1fr_auto] sm:items-center"
+        >
           <ProductImage image={product.image} name={product.name} />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1395,13 +2060,20 @@ function ProductList({ products, onEdit, compact = false }: { products: Product[
               <StatusBadge label={product.status} />
             </div>
             <p className="mt-1 text-sm text-[#9a3412]">
-              {product.id} · {product.category} · {product.unit}
+              {product.id} · {product.category} ·{" "}
+              {getProductMenuLabel(product.menuSlug)} menu · {product.unit}
             </p>
             <p className="mt-1 text-sm font-semibold text-primary">
-              {toBanglaNumber(product.price)} টাকা · স্টক {toBanglaNumber(product.stock)}
+              ক্রয় {toBanglaNumber(product.purchasePrice ?? 0)} টাকা · বিক্রয়{" "}
+              {toBanglaNumber(product.price)} টাকা · স্টক{" "}
+              {toBanglaNumber(product.stock)}
             </p>
           </div>
-          <button type="button" onClick={() => onEdit(product)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-2 text-sm font-semibold text-[#7c2d12]">
+          <button
+            type="button"
+            onClick={() => onEdit(product)}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-2 text-sm font-semibold text-[#7c2d12]"
+          >
             <Edit3 className="h-4 w-4" />
             এডিট
           </button>
@@ -1411,7 +2083,15 @@ function ProductList({ products, onEdit, compact = false }: { products: Product[
   );
 }
 
-function ProductImage({ image, name, size = "normal" }: { image?: string; name: string; size?: "normal" | "large" }) {
+function ProductImage({
+  image,
+  name,
+  size = "normal",
+}: {
+  image?: string;
+  name: string;
+  size?: "normal" | "large";
+}) {
   const [failed, setFailed] = useState(false);
   const src = getProductImageSrc(image);
   const className =
@@ -1421,16 +2101,31 @@ function ProductImage({ image, name, size = "normal" }: { image?: string; name: 
 
   if (!src || failed) {
     return (
-      <div className={`${className} flex items-center justify-center bg-gradient-to-br from-orange-200 to-amber-500 text-xs font-bold text-white`}>
+      <div
+        className={`${className} flex items-center justify-center bg-gradient-to-br from-orange-200 to-amber-500 text-xs font-bold text-white`}
+      >
         ছবি নেই
       </div>
     );
   }
 
-  return <img src={src} alt={name} className={className} onError={() => setFailed(true)} />;
+  return (
+    <img
+      src={src}
+      alt={name}
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
-function ReviewMediaPreview({ media, size = "normal" }: { media?: ReviewMedia | null; size?: "normal" | "large" }) {
+function ReviewMediaPreview({
+  media,
+  size = "normal",
+}: {
+  media?: ReviewMedia | null;
+  size?: "normal" | "large";
+}) {
   const className =
     size === "large"
       ? "h-[150px] w-full rounded-2xl object-cover sm:w-[180px]"
@@ -1438,7 +2133,9 @@ function ReviewMediaPreview({ media, size = "normal" }: { media?: ReviewMedia | 
 
   if (!media?.url) {
     return (
-      <div className={`${className} flex items-center justify-center bg-gradient-to-br from-orange-200 to-amber-500 text-xs font-bold text-white`}>
+      <div
+        className={`${className} flex items-center justify-center bg-gradient-to-br from-orange-200 to-amber-500 text-xs font-bold text-white`}
+      >
         মিডিয়া নেই
       </div>
     );
@@ -1456,26 +2153,139 @@ function ReviewMediaPreview({ media, size = "normal" }: { media?: ReviewMedia | 
     );
   }
 
-  return <img src={media.url} alt={media.name || "Review media"} className={className} />;
+  return (
+    <img
+      src={media.url}
+      alt={media.name || "Review media"}
+      className={className}
+    />
+  );
 }
 
 function ReviewRating({ rating }: { rating: number }) {
   const value = Math.min(5, Math.max(1, Number(rating || 5)));
 
   return (
-    <span className="inline-flex items-center gap-0.5 text-[#ffb703]" aria-label={`${value} star review`}>
+    <span
+      className="inline-flex items-center gap-0.5 text-[#ffb703]"
+      aria-label={`${value} star review`}
+    >
       {Array.from({ length: 5 }).map((_, index) => (
-        <Star key={index} className={`h-4 w-4 ${index < value ? "fill-current" : "text-[#fed7aa]"}`} />
+        <Star
+          key={index}
+          className={`h-4 w-4 ${index < value ? "fill-current" : "text-[#fed7aa]"}`}
+        />
       ))}
     </span>
   );
 }
 
+function ProfitChart({
+  rows,
+  totalProfit,
+  totalProductCost,
+  totalOperationalCost,
+}: {
+  rows: {
+    id: string;
+    label: string;
+    profit: number;
+    salesAmount: number;
+    productCost: number;
+    operationalCost: number;
+  }[];
+  totalProfit: number;
+  totalProductCost: number;
+  totalOperationalCost: number;
+}) {
+  const max = Math.max(1, ...rows.map((row) => Math.abs(row.profit)));
+
+  return (
+    <section className="rounded-3xl border border-[#fed7aa] bg-white p-5 shadow-soft">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-bold text-primary">Actual Profit</p>
+          <h2 className="mt-1 text-3xl font-bold text-[#7c2d12]">
+            {toBanglaNumber(totalProfit)} টাকা
+          </h2>
+          <p className="mt-2 text-sm font-semibold text-[#9a3412]">
+            ক্রয় মূল্য, ক্যারেট {toBanglaNumber(CARET_COST_PER_ORDER)} টাকা এবং
+            ডেলিভারি {toBanglaNumber(DELIVERY_COST_PER_ORDER)} টাকা বাদ দিয়ে
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
+          <div className="rounded-2xl bg-[#fff7f1] p-4">
+            <p className="text-xs font-bold text-[#9a3412]">
+              মোট প্রোডাক্ট কস্ট
+            </p>
+            <p className="mt-1 text-xl font-bold text-[#7c2d12]">
+              {toBanglaNumber(totalProductCost)} টাকা
+            </p>
+          </div>
+          <div className="rounded-2xl bg-[#fff7f1] p-4">
+            <p className="text-xs font-bold text-[#9a3412]">
+              ক্যারেট + ডেলিভারি কস্ট
+            </p>
+            <p className="mt-1 text-xl font-bold text-[#7c2d12]">
+              {toBanglaNumber(totalOperationalCost)} টাকা
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {rows.length > 0 ? (
+        <div className="mt-6 h-[320px] rounded-2xl border border-[#fed7aa] bg-[#fffaf6] p-4">
+          <div className="flex h-full items-end gap-3 overflow-x-auto pb-2">
+            {rows.map((row) => {
+              const height = Math.max(8, (Math.abs(row.profit) / max) * 100);
+              const isLoss = row.profit < 0;
+
+              return (
+                <div
+                  key={row.id}
+                  className="flex h-full min-w-[72px] flex-1 flex-col justify-end"
+                >
+                  <div className="mb-2 text-center text-xs font-bold text-[#7c2d12]">
+                    {toBanglaNumber(row.profit)}
+                  </div>
+                  <div
+                    title={`Sales ${row.salesAmount}, Product cost ${row.productCost}, Extra cost ${row.operationalCost}`}
+                    className={`mx-auto w-full max-w-[86px] rounded-t-2xl ${isLoss ? "bg-[#ef4444]" : "bg-[linear-gradient(180deg,#22c55e,#16a34a)]"}`}
+                    style={{ height: `${height}%` }}
+                  />
+                  <div className="mt-2 truncate text-center text-xs font-semibold text-[#9a3412]">
+                    {row.label}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6">
+          <EmptyState
+            icon={<BarChart3 className="h-8 w-8" />}
+            title="প্রফিট ডাটা নেই"
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SimpleBars({ products }: { products: Product[] }) {
-  const max = Math.max(1, ...products.map((product) => Number(product.sales || 0)));
+  const max = Math.max(
+    1,
+    ...products.map((product) => Number(product.sales || 0)),
+  );
 
   if (products.length === 0) {
-    return <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="প্রোডাক্ট ডাটা নেই" />;
+    return (
+      <EmptyState
+        icon={<BarChart3 className="h-8 w-8" />}
+        title="প্রোডাক্ট ডাটা নেই"
+      />
+    );
   }
 
   return (
@@ -1487,7 +2297,12 @@ function SimpleBars({ products }: { products: Product[] }) {
             <span>{toBanglaNumber(product.sales)}</span>
           </div>
           <div className="h-3 overflow-hidden rounded-full bg-[#fff1e8]">
-            <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(4, (Number(product.sales || 0) / max) * 100)}%` }} />
+            <div
+              className="h-full rounded-full bg-primary"
+              style={{
+                width: `${Math.max(4, (Number(product.sales || 0) / max) * 100)}%`,
+              }}
+            />
           </div>
         </div>
       ))}
@@ -1498,7 +2313,9 @@ function SimpleBars({ products }: { products: Product[] }) {
 function EmptyState({ icon, title }: { icon: ReactNode; title: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-[#fed7aa] bg-[#fffaf6] px-5 py-10 text-center text-[#9a3412]">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#fff1e8] text-primary">{icon}</div>
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#fff1e8] text-primary">
+        {icon}
+      </div>
       <h3 className="mt-3 text-lg font-bold text-[#7c2d12]">{title}</h3>
     </div>
   );
@@ -1519,19 +2336,31 @@ function StatusBadge({ label }: { label: string }) {
       ? "bg-[#dcfce7] text-[#166534]"
       : label === "শীঘ্রই আসছে"
         ? "bg-[#fef3c7] text-[#92400e]"
-      : label === "স্টক কম" || label === "প্রসেসিং" || label === "নতুন অর্ডার" || label === "নতুন" || label === "অপেক্ষমাণ"
-        ? "bg-[#fff1e8] text-primary"
-        : label === "বন্ধ" || label === "লুকানো"
-          ? "bg-[#fee2e2] text-[#b91c1c]"
-          : "bg-[#e0f2fe] text-[#0369a1]";
+        : label === "স্টক কম" ||
+            label === "প্রসেসিং" ||
+            label === "নতুন অর্ডার" ||
+            label === "নতুন" ||
+            label === "অপেক্ষমাণ"
+          ? "bg-[#fff1e8] text-primary"
+          : label === "বন্ধ" || label === "লুকানো"
+            ? "bg-[#fee2e2] text-[#b91c1c]"
+            : "bg-[#e0f2fe] text-[#0369a1]";
 
-  return <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${tone}`}>{label}</span>;
+  return (
+    <span
+      className={`inline-flex rounded-full px-3 py-1 text-xs font-bold ${tone}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-sm font-semibold text-[#7c2d12]">{label}</span>
+      <span className="mb-2 block text-sm font-semibold text-[#7c2d12]">
+        {label}
+      </span>
       {children}
     </label>
   );
