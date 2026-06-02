@@ -34,7 +34,8 @@ export async function apiRequest<T>(
   options: ApiRequestOptions = {}
 ): Promise<T> {
   const method = (options.method ?? "GET").toUpperCase();
-  const { timeoutMs = 15000, ...requestOptions } = options;
+  const { timeoutMs = method === "GET" ? 20000 : 45000, ...requestOptions } =
+    options;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 

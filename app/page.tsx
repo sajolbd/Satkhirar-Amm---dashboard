@@ -159,6 +159,9 @@ const DASHBOARD_ORDERS_STORAGE_KEY = "satkhirar-amm-dashboard-orders";
 const DASHBOARD_USERS_STORAGE_KEY = "satkhirar-amm-dashboard-users";
 const DASHBOARD_REVIEWS_STORAGE_KEY = "satkhirar-amm-dashboard-reviews";
 const PHONE_AUTH_EMAIL_DOMAIN = "phone.satkhirar-amm.local";
+const MAX_PRODUCT_IMAGE_UPLOAD_SIZE = 6 * 1024 * 1024;
+const PRODUCT_IMAGE_MAX_DIMENSION = 1200;
+const PRODUCT_IMAGE_QUALITY = 0.82;
 const MAX_REVIEW_MEDIA_SIZE = 8 * 1024 * 1024;
 const CARET_COST_PER_ORDER = 120;
 const DELIVERY_COST_PER_ORDER = 150;
@@ -302,6 +305,58 @@ function formatFileSize(size?: number) {
 function getProductImageSrc(image?: string) {
   if (!image) return "";
   return image;
+}
+
+function resizeProductImageSource(source: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new window.Image();
+
+    image.onerror = () => reject(new Error("Product image could not be loaded."));
+    image.onload = () => {
+      const scale = Math.min(
+        1,
+        PRODUCT_IMAGE_MAX_DIMENSION / Math.max(image.width, image.height),
+      );
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("Product image could not be prepared."));
+        return;
+      }
+
+      context.drawImage(image, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", PRODUCT_IMAGE_QUALITY));
+    };
+
+    image.src = source;
+  });
+}
+
+function resizeProductImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      reject(new Error("Please upload an image file."));
+      return;
+    }
+
+    if (file.size > MAX_PRODUCT_IMAGE_UPLOAD_SIZE) {
+      reject(new Error("Product image must be 6 MB or smaller."));
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error("Product image could not be read."));
+    reader.onload = () => resizeProductImageSource(String(reader.result || ""))
+      .then(resolve)
+      .catch(reject);
+    reader.readAsDataURL(file);
+  });
 }
 
 function isLowStock(product: Product) {
@@ -646,9 +701,14 @@ export default function DashboardPage() {
 
   const saveProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const productPayload = normalizeProductPayload(productForm);
 
     try {
+      const productPayload = normalizeProductPayload({
+        ...productForm,
+        image: productForm.image?.startsWith("data:image/")
+          ? await resizeProductImageSource(productForm.image)
+          : productForm.image,
+      });
       const savedProduct = await apiRequest<Product>(
         editingProduct ? `/api/products/${editingProduct.id}` : "/api/products",
         {
@@ -672,14 +732,19 @@ export default function DashboardPage() {
     }
   };
 
-  const handleProductImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleProductImageChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
 
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => updateProductForm("image", String(reader.result));
-    reader.readAsDataURL(file);
+    try {
+      updateProductForm("image", await resizeProductImage(file));
+    } catch (error) {
+      event.target.value = "";
+      window.alert(
+        error instanceof Error ? error.message : "Product image upload failed.",
+      );
+    }
   };
 
   const openAddReview = () => {
