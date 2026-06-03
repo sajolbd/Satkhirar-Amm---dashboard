@@ -514,13 +514,11 @@ export default function DashboardPage() {
     window.localStorage.removeItem(DASHBOARD_ORDERS_STORAGE_KEY);
 
     const loadDashboardData = async () => {
+      const loadErrors: string[] = [];
+
       try {
         setLoadError("");
-        const [nextProducts, nextOrders, nextUsers] = await Promise.all([
-          apiRequest<Product[]>("/api/products"),
-          apiRequest<WebsiteOrder[]>("/api/orders"),
-          apiRequest<WebsiteUser[]>("/api/users"),
-        ]);
+        const nextProducts = await apiRequest<Product[]>("/api/products");
 
         setProducts((currentProducts) =>
           nextProducts.map((nextProduct) =>
@@ -530,15 +528,29 @@ export default function DashboardPage() {
             ),
           ),
         );
+      } catch (error) {
+        loadErrors.push(getApiError(error, "Product data load failed."));
+      }
+
+      try {
+        const nextOrders = await apiRequest<WebsiteOrder[]>("/api/orders");
+
         setWebsiteOrders(nextOrders);
+      } catch (error) {
+        loadErrors.push(getApiError(error, "Order data load failed."));
+        setWebsiteOrders([]);
+      }
+
+      try {
+        const nextUsers = await apiRequest<WebsiteUser[]>("/api/users");
+
         setWebsiteUsers(nextUsers);
         window.localStorage.setItem(
           DASHBOARD_USERS_STORAGE_KEY,
           JSON.stringify(nextUsers),
         );
       } catch (error) {
-        setLoadError(getApiError(error, "Dashboard data load failed."));
-        setWebsiteOrders([]);
+        loadErrors.push(getApiError(error, "User data load failed."));
 
         const usersRaw = window.localStorage.getItem(
           DASHBOARD_USERS_STORAGE_KEY,
@@ -547,6 +559,8 @@ export default function DashboardPage() {
           setWebsiteUsers(JSON.parse(usersRaw));
         }
       }
+
+      setLoadError(loadErrors[0] || "");
 
       try {
         setReviewLoadError("");
