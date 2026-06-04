@@ -23,7 +23,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 
 import { apiRequest, getApiError } from "../lib/api";
@@ -445,6 +445,8 @@ export default function DashboardPage() {
   const [reviewForm, setReviewForm] = useState<ReviewForm>(emptyReviewForm);
   const [loadError, setLoadError] = useState("");
   const [reviewLoadError, setReviewLoadError] = useState("");
+  const dashboardLoadRunRef = useRef(0);
+  const isDashboardLoadRunningRef = useRef(false);
 
   const totalRevenue = websiteOrders.reduce(
     (total, order) => total + Number(order.total || 0),
@@ -566,23 +568,36 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!adminSession) return;
 
-    window.localStorage.removeItem(DASHBOARD_ORDERS_STORAGE_KEY);
-
     const loadDashboardData = async () => {
+      if (isDashboardLoadRunningRef.current) return;
+
+      isDashboardLoadRunningRef.current = true;
+      const currentLoadRun = dashboardLoadRunRef.current + 1;
+      dashboardLoadRunRef.current = currentLoadRun;
       const loadErrors: string[] = [];
+      let hasPrimaryData = false;
+
+      const isLatestLoadRun = () =>
+        dashboardLoadRunRef.current === currentLoadRun;
 
       try {
-        setLoadError("");
+        if (isLatestLoadRun()) {
+          setLoadError("");
+        }
+
         const nextProducts = await apiRequest<Product[]>("/api/products");
 
-        setProducts((currentProducts) =>
-          nextProducts.map((nextProduct) =>
-            mergeProductFallback(
-              nextProduct,
-              currentProducts.find((product) => product.id === nextProduct.id),
+        if (isLatestLoadRun()) {
+          hasPrimaryData = true;
+          setProducts((currentProducts) =>
+            nextProducts.map((nextProduct) =>
+              mergeProductFallback(
+                nextProduct,
+                currentProducts.find((product) => product.id === nextProduct.id),
+              ),
             ),
-          ),
-        );
+          );
+        }
       } catch (error) {
         loadErrors.push(getApiError(error, "Product data load failed."));
       }
@@ -590,50 +605,80 @@ export default function DashboardPage() {
       try {
         const nextOrders = await apiRequest<WebsiteOrder[]>("/api/orders");
 
-        setWebsiteOrders(nextOrders);
+        if (isLatestLoadRun()) {
+          hasPrimaryData = true;
+          setWebsiteOrders(nextOrders);
+          window.localStorage.setItem(
+            DASHBOARD_ORDERS_STORAGE_KEY,
+            JSON.stringify(nextOrders),
+          );
+        }
       } catch (error) {
         loadErrors.push(getApiError(error, "Order data load failed."));
-        setWebsiteOrders([]);
+
+        const ordersRaw = window.localStorage.getItem(
+          DASHBOARD_ORDERS_STORAGE_KEY,
+        );
+        if (ordersRaw && isLatestLoadRun()) {
+          hasPrimaryData = true;
+          setWebsiteOrders(JSON.parse(ordersRaw));
+        }
       }
 
       try {
         const nextUsers = await apiRequest<WebsiteUser[]>("/api/users");
 
-        setWebsiteUsers(nextUsers);
-        window.localStorage.setItem(
-          DASHBOARD_USERS_STORAGE_KEY,
-          JSON.stringify(nextUsers),
-        );
+        if (isLatestLoadRun()) {
+          hasPrimaryData = true;
+          setWebsiteUsers(nextUsers);
+          window.localStorage.setItem(
+            DASHBOARD_USERS_STORAGE_KEY,
+            JSON.stringify(nextUsers),
+          );
+        }
       } catch (error) {
         loadErrors.push(getApiError(error, "User data load failed."));
 
         const usersRaw = window.localStorage.getItem(
           DASHBOARD_USERS_STORAGE_KEY,
         );
-        if (usersRaw) {
+        if (usersRaw && isLatestLoadRun()) {
+          hasPrimaryData = true;
           setWebsiteUsers(JSON.parse(usersRaw));
         }
       }
 
-      setLoadError(loadErrors[0] || "");
+      if (isLatestLoadRun()) {
+        setLoadError(hasPrimaryData ? "" : loadErrors[0] || "");
+      }
 
       try {
-        setReviewLoadError("");
+        if (isLatestLoadRun()) {
+          setReviewLoadError("");
+        }
         const nextReviews = await apiRequest<WebsiteReview[]>("/api/reviews");
-        setWebsiteReviews(nextReviews);
-        window.localStorage.setItem(
-          DASHBOARD_REVIEWS_STORAGE_KEY,
-          JSON.stringify(nextReviews),
-        );
+        if (isLatestLoadRun()) {
+          setWebsiteReviews(nextReviews);
+          window.localStorage.setItem(
+            DASHBOARD_REVIEWS_STORAGE_KEY,
+            JSON.stringify(nextReviews),
+          );
+        }
       } catch (error) {
-        setReviewLoadError(getApiError(error, "Review data load failed."));
+        if (isLatestLoadRun()) {
+          setReviewLoadError(getApiError(error, "Review data load failed."));
+        }
         const reviewsRaw = window.localStorage.getItem(
           DASHBOARD_REVIEWS_STORAGE_KEY,
         );
-        if (reviewsRaw) {
+        if (reviewsRaw && isLatestLoadRun()) {
           setWebsiteReviews(JSON.parse(reviewsRaw));
-        } else {
+        } else if (isLatestLoadRun()) {
           setWebsiteReviews([]);
+        }
+      } finally {
+        if (isLatestLoadRun()) {
+          isDashboardLoadRunningRef.current = false;
         }
       }
     };
