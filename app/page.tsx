@@ -168,6 +168,7 @@ const DELIVERY_COST_PER_ORDER = 150;
 
 const productMenuOptions = [
   { slug: "mango", label: "আম", category: "আম" },
+  { slug: "ghi", label: "ঘি", category: "ঘি" },
   { slug: "gur", label: "গুড়", category: "গুড়" },
   { slug: "plants", label: "চারা", category: "চারা" },
   { slug: "pickle", label: "আচার", category: "আচার" },
