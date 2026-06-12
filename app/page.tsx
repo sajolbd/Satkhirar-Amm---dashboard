@@ -127,6 +127,7 @@ type WebsiteUser = {
   name: string;
   email?: string;
   phone: string;
+  role?: string;
   source: string;
   status: string;
   joinedAt: string;
@@ -944,6 +945,54 @@ export default function DashboardPage() {
     }
   };
 
+  const deleteProduct = async (productId: string) => {
+    const shouldDelete = window.confirm(`Product ${productId} delete korben?`);
+
+    if (!shouldDelete) return;
+
+    const previousProducts = products;
+    setProducts((current) =>
+      current.filter((product) => product.id !== productId),
+    );
+
+    try {
+      await apiRequest<{ ok: boolean; product: Product }>(
+        `/api/products/${productId}`,
+        {
+          method: "DELETE",
+        },
+      );
+    } catch (error) {
+      setProducts(previousProducts);
+      window.alert(getApiError(error, "Product delete failed."));
+    }
+  };
+
+  const deleteWebsiteUser = async (userId: string) => {
+    const shouldDelete = window.confirm(`User ${userId} delete korben?`);
+
+    if (!shouldDelete) return;
+
+    const previousUsers = websiteUsers;
+    setWebsiteUsers((current) => current.filter((user) => user.id !== userId));
+
+    try {
+      await apiRequest<{ ok: boolean; user: WebsiteUser }>(
+        `/api/users/${userId}`,
+        {
+          method: "DELETE",
+        },
+      );
+      window.localStorage.setItem(
+        DASHBOARD_USERS_STORAGE_KEY,
+        JSON.stringify(previousUsers.filter((user) => user.id !== userId)),
+      );
+    } catch (error) {
+      setWebsiteUsers(previousUsers);
+      window.alert(getApiError(error, "User delete failed."));
+    }
+  };
+
   const updateWebsiteOrderStatus = (orderId: string, status: string) => {
     setWebsiteOrders((current) =>
       current.map((order) =>
@@ -1017,8 +1066,12 @@ export default function DashboardPage() {
       <div className="grid min-h-screen lg:grid-cols-[248px_minmax(0,1fr)]">
         <aside className="border-r border-[#fed7aa] bg-white px-5 py-5 lg:sticky lg:top-0 lg:h-screen">
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#fff1e8] text-primary">
-              <ShoppingBag className="h-6 w-6" />
+            <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl bg-[#fff1e8]">
+              <img
+                src="/images/logo.png"
+                alt="Satkhirar Amm"
+                className="h-11 w-11 object-contain"
+              />
             </div>
             <div>
               <h1 className="text-lg font-bold leading-tight text-[#7c2d12]">
@@ -1208,7 +1261,7 @@ export default function DashboardPage() {
                 title="সাইন আপ ইউজার"
                 action={`${toBanglaNumber(websiteUsers.length)} জন`}
               >
-                <UserList users={websiteUsers} />
+                <UserList users={websiteUsers} onDelete={deleteWebsiteUser} />
               </Panel>
             </section>
           )}
@@ -1281,6 +1334,7 @@ export default function DashboardPage() {
                 <ProductList
                   products={filteredProducts}
                   onEdit={openEditProduct}
+                  onDelete={deleteProduct}
                 />
               </Panel>
             </section>
@@ -2011,7 +2065,13 @@ function OrderList({
   );
 }
 
-function UserList({ users }: { users: WebsiteUser[] }) {
+function UserList({
+  users,
+  onDelete,
+}: {
+  users: WebsiteUser[];
+  onDelete: (userId: string) => void;
+}) {
   if (users.length === 0) {
     return (
       <EmptyState icon={<Users className="h-8 w-8" />} title="কোনো ইউজার নেই" />
@@ -2020,20 +2080,22 @@ function UserList({ users }: { users: WebsiteUser[] }) {
 
   return (
     <div className="overflow-hidden rounded-2xl border border-[#fed7aa] bg-white">
-      <div className="hidden grid-cols-[1.2fr_1fr_1.3fr_130px] gap-3 bg-[#fff7f1] px-4 py-3 text-xs font-bold uppercase tracking-wide text-[#9a3412] md:grid">
+      <div className="hidden grid-cols-[1.2fr_1fr_1.3fr_130px_120px] gap-3 bg-[#fff7f1] px-4 py-3 text-xs font-bold uppercase tracking-wide text-[#9a3412] md:grid">
         <span>নাম</span>
         <span>মোবাইল</span>
         <span>ইমেইল</span>
         <span>স্ট্যাটাস</span>
+        <span>Action</span>
       </div>
       <div className="divide-y divide-[#fed7aa]">
         {users.map((user) => {
           const displayEmail = getDisplayUserEmail(user.email);
+          const canDelete = user.role !== "admin";
 
           return (
             <div
               key={user.id || user.phone || user.email}
-              className="grid gap-3 bg-[#fffaf6] px-4 py-4 md:grid-cols-[1.2fr_1fr_1.3fr_130px] md:items-center"
+              className="grid gap-3 bg-[#fffaf6] px-4 py-4 md:grid-cols-[1.2fr_1fr_1.3fr_130px_120px] md:items-center"
             >
               <div className="min-w-0">
                 <p className="font-bold text-[#7c2d12]">
@@ -2050,6 +2112,15 @@ function UserList({ users }: { users: WebsiteUser[] }) {
                 {displayEmail || "ইমেইল নেই"}
               </p>
               <StatusBadge label={user.status || "নতুন"} />
+              <button
+                type="button"
+                onClick={() => onDelete(user.id)}
+                disabled={!canDelete}
+                className="inline-flex items-center justify-center gap-1 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 hover:border-red-400 disabled:cursor-not-allowed disabled:border-[#fed7aa] disabled:bg-[#fff7f1] disabled:text-[#c2410c]/50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                ডিলিট
+              </button>
             </div>
           );
         })}
@@ -2155,10 +2226,12 @@ function ReviewList({
 function ProductList({
   products,
   onEdit,
+  onDelete,
   compact = false,
 }: {
   products: Product[];
   onEdit: (product: Product) => void;
+  onDelete?: (productId: string) => void;
   compact?: boolean;
 }) {
   if (products.length === 0) {
@@ -2193,14 +2266,26 @@ function ProductList({
               {toBanglaNumber(product.stock)}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => onEdit(product)}
-            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-2 text-sm font-semibold text-[#7c2d12]"
-          >
-            <Edit3 className="h-4 w-4" />
-            এডিট
-          </button>
+          <div className="flex flex-wrap gap-2 sm:justify-end">
+            <button
+              type="button"
+              onClick={() => onEdit(product)}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[#fed7aa] bg-[#fff7f1] px-4 py-2 text-sm font-semibold text-[#7c2d12]"
+            >
+              <Edit3 className="h-4 w-4" />
+              এডিট
+            </button>
+            {onDelete && (
+              <button
+                type="button"
+                onClick={() => onDelete(product.id)}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:border-red-400"
+              >
+                <Trash2 className="h-4 w-4" />
+                ডিলিট
+              </button>
+            )}
+          </div>
         </div>
       ))}
     </div>
